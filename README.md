@@ -57,7 +57,15 @@ starten:
 
 ```sh
 fancy-renamer ~/Bilder/*.jpg
+fancy-renamer --recursive ~/Bilder   # samt Unterordnern
 ```
+
+Der Umschalter **Unterordner** im Kopf des Fensters bezieht beim Hinzufügen von Ordnern auch deren
+Unterordner ein – für die Ordnerauswahl, Drag & Drop und (als `--recursive`/`-r`) die
+Kommandozeile. Standard ist „aus“. Versteckte Dateien und Ordner (führender Punkt) bleiben immer
+außen vor, Symlink-Zyklen enden ohne Endlosschleife, nicht lesbare Unterordner werden übersprungen
+und gemeldet. Dateien mit gleichem Stamm aus verschiedenen Ordnern bilden weiterhin eine Gruppe;
+umbenannt wird jede Datei in ihrem eigenen Ordner.
 
 Die Liste bleibt natürlich sortiert (`foto2` vor `foto10`), doppelte Pfade werden nicht erneut
 aufgenommen, nicht lesbare Pfade meldet ein Hinweis.

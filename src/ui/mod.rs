@@ -6,4 +6,4 @@ pub mod presets;
 pub mod rule_panel;
 pub mod state;
 
-pub use app::run;
+pub use app::{parse_args, run};

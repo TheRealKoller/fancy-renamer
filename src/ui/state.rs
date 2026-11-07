@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -21,6 +22,8 @@ pub struct AppState {
     pub chain_error: Option<String>,
     /// Zähler gegen veraltete Ergebnisse aus der Hintergrundberechnung.
     pub plan_generation: u64,
+    /// Unterordner beim Hinzufügen von Ordnern einbeziehen.
+    pub recursive: bool,
 }
 
 pub type SharedState = Rc<RefCell<AppState>>;
@@ -67,45 +70,106 @@ pub fn add_paths(state: &SharedState, paths: impl IntoIterator<Item = PathBuf>) 
     rejected
 }
 
-/// Dateien der obersten Ebene eines Ordners (nicht rekursiv), ohne versteckte
-/// Dateien, natürlich sortiert.
+/// Ergebnis einer Ordner-Suche: gefundene Dateien und nicht lesbare Ordner.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FolderScan {
+    pub files: Vec<PathBuf>,
+    pub skipped: Vec<PathBuf>,
+}
+
+/// Dateien eines Ordners (nicht rekursiv), ohne versteckte Dateien.
 pub fn files_in_folder(folder: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return Vec::new();
-    };
-    let mut paths = entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .map(|entry| entry.path())
-        .filter(|path| {
-            !path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with('.'))
-        })
-        .collect::<Vec<_>>();
-    paths.sort_by(|a, b| natural_cmp(&name_of(a), &name_of(b)));
-    paths
+    scan_folder(folder, false).files
+}
+
+/// Dateien eines Ordners; mit `recursive` auch aus allen Unterordnern.
+///
+/// Versteckte Dateien und Ordner (führender Punkt) bleiben außen vor.
+/// Nicht lesbare Ordner landen in `skipped`, statt den Import abzubrechen.
+/// Symlink-Zyklen werden über die Menge der bereits besuchten Verzeichnisse
+/// abgefangen, sodass ein Verweis auf einen Elternordner endet.
+pub fn scan_folder(folder: &Path, recursive: bool) -> FolderScan {
+    let mut scan = FolderScan::default();
+    let mut visited = HashSet::new();
+    let mut pending = vec![folder.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let identity = directory
+            .canonicalize()
+            .unwrap_or_else(|_| directory.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            scan.skipped.push(directory);
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_hidden(&path) {
+                continue;
+            }
+            if path.is_dir() {
+                if recursive {
+                    pending.push(path);
+                }
+            } else if path.is_file() {
+                scan.files.push(path);
+            }
+        }
+    }
+    sort_paths(&mut scan.files);
+    scan
+}
+
+/// Pfade erweitern: Dateien bleiben, Ordner werden je nach Modus durchsucht.
+pub fn expand_paths(paths: impl IntoIterator<Item = PathBuf>, recursive: bool) -> FolderScan {
+    let mut scan = FolderScan::default();
+    for path in paths {
+        if path.is_dir() {
+            let nested = scan_folder(&path, recursive);
+            scan.files.extend(nested.files);
+            scan.skipped.extend(nested.skipped);
+        } else {
+            scan.files.push(path);
+        }
+    }
+    sort_paths(&mut scan.files);
+    scan
 }
 
 /// Pfade aus einer Drag-&-Drop-Ablage: Dateien direkt, Ordner über ihren
-/// Inhalt der obersten Ebene.
-pub fn paths_from_drop(files: &gtk::gdk::FileList) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+/// Inhalt (optional samt Unterordnern).
+pub fn paths_from_drop(files: &gtk::gdk::FileList, recursive: bool) -> FolderScan {
+    let mut scan = FolderScan::default();
     for file in files.files() {
-        match file.path() {
-            Some(path) if path.is_dir() => paths.extend(files_in_folder(&path)),
-            Some(path) => paths.push(path),
-            None => {}
-        }
+        let Some(path) = file.path() else {
+            continue;
+        };
+        let nested = if path.is_dir() {
+            scan_folder(&path, recursive)
+        } else {
+            FolderScan {
+                files: vec![path],
+                skipped: Vec::new(),
+            }
+        };
+        scan.files.extend(nested.files);
+        scan.skipped.extend(nested.skipped);
     }
-    paths
+    sort_paths(&mut scan.files);
+    scan
 }
 
-fn name_of(path: &Path) -> String {
+fn is_hidden(path: &Path) -> bool {
     path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.'))
+}
+
+/// Natürliche Reihenfolge über den vollständigen Pfad, damit Läufe
+/// reproduzierbar sind.
+fn sort_paths(paths: &mut [PathBuf]) {
+    paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
 }
 
 /// Plan im Hintergrund berechnen und im GTK-Hauptloop abholen. Wird ab etwa

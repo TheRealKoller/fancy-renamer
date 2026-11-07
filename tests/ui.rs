@@ -16,7 +16,8 @@ use fancy_renamer::engine::{
 use fancy_renamer::ui::file_list::{self, RemoveHandler};
 use fancy_renamer::ui::rule_panel::RulePanel;
 use fancy_renamer::ui::state::{
-    AppState, SharedState, add_paths, build_plan_async, files_in_folder, paths_from_drop,
+    AppState, SharedState, add_paths, build_plan_async, expand_paths, files_in_folder,
+    paths_from_drop, scan_folder,
 };
 use tempfile::TempDir;
 
@@ -414,11 +415,12 @@ fn dropped_folders_contribute_their_files() {
             gtk::gio::File::for_path(&folder),
             gtk::gio::File::for_path(&single),
         ]);
-        let paths = paths_from_drop(&files);
-        let names = paths
+        let paths = paths_from_drop(&files, false).files;
+        let mut names = paths
             .iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
+        names.sort();
         assert_eq!(names, ["a.jpg", "b.jpg", "einzeln.jpg"]);
     });
 }
@@ -648,4 +650,158 @@ fn preset_menu_lists_saved_presets() {
         button.set_menu_model(Some(&menu));
         assert!(button.menu_model().is_some());
     });
+}
+
+#[test]
+fn command_line_parses_recursive_flag_and_paths() {
+    use std::ffi::OsString;
+
+    let (paths, recursive) =
+        fancy_renamer::ui::parse_args(["bilder", "--recursive", "a.jpg"].map(OsString::from));
+    assert_eq!(paths, [PathBuf::from("bilder"), PathBuf::from("a.jpg")]);
+    assert!(recursive);
+
+    let (paths, recursive) = fancy_renamer::ui::parse_args(["-r", "baum"].map(OsString::from));
+    assert_eq!(paths, [PathBuf::from("baum")]);
+    assert!(recursive);
+
+    let (paths, recursive) = fancy_renamer::ui::parse_args(["a.jpg"].map(OsString::from));
+    assert_eq!(paths, [PathBuf::from("a.jpg")]);
+    assert!(!recursive);
+}
+
+fn tree(names: &[(&str, &str)]) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    for (relative, content) in names {
+        let path = dir.path().join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, content.as_bytes()).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn recursive_scan_takes_subfolders_only_on_demand() {
+    let dir = tree(&[("fotos/a.jpg", "x"), ("fotos/urlaub/b.jpg", "x")]);
+    let root = dir.path().join("fotos");
+
+    assert_eq!(files_in_folder(&root).len(), 1);
+    let deep = scan_folder(&root, true);
+    assert_eq!(deep.files.len(), 2);
+    assert!(deep.skipped.is_empty());
+
+    // Dieselbe Funktion trägt auch gemischte Pfade (CLI, Drag & Drop).
+    let single = dir.path().join("einzeln.jpg");
+    fs::write(&single, b"x").unwrap();
+    let expanded = expand_paths([root, single], true);
+    let mut names = expanded
+        .files
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, ["a.jpg", "b.jpg", "einzeln.jpg"]);
+}
+
+#[test]
+fn recursive_scan_skips_hidden_entries_and_symlink_cycles() {
+    let dir = tree(&[
+        ("fotos/.cache/versteckt.jpg", "x"),
+        ("fotos/.versteckt.jpg", "x"),
+        ("fotos/urlaub/sichtbar.jpg", "x"),
+    ]);
+    let root = dir.path().join("fotos");
+    std::os::unix::fs::symlink(&root, root.join("urlaub/zurueck")).unwrap();
+
+    let scan = scan_folder(&root, true);
+    let names = scan
+        .files
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["sichtbar.jpg"]);
+}
+
+#[test]
+fn unreadable_subfolder_is_skipped_and_reported() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tree(&[("fotos/offen/a.jpg", "x"), ("fotos/gesperrt/b.jpg", "x")]);
+    let root = dir.path().join("fotos");
+    let locked = root.join("gesperrt");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Als root (CI-Container) greifen Dateirechte nicht; dann nichts zu prüfen.
+    let readable = fs::read_dir(&locked).is_ok();
+    let scan = scan_folder(&root, true);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        return;
+    }
+    assert!(scan.skipped.contains(&locked));
+    assert_eq!(scan.files.len(), 1);
+}
+
+#[test]
+fn large_tree_is_scanned_completely() {
+    use fancy_renamer::engine::build_plan;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let dir = TempDir::new().unwrap();
+    for folder in 0..10 {
+        let path = dir.path().join(format!("ordner{folder}"));
+        fs::create_dir_all(&path).unwrap();
+        for index in 0..100 {
+            fs::write(path.join(format!("foto{index}.jpg")), b"x").unwrap();
+        }
+    }
+    let scan = scan_folder(dir.path(), true);
+    assert_eq!(scan.files.len(), 1_000);
+
+    let state: SharedState = Rc::new(RefCell::new(AppState::default()));
+    add_paths(&state, scan.files);
+    let chain = RuleChain::new(vec![Box::new(
+        fancy_renamer::engine::NumberingRule::new(
+            fancy_renamer::engine::NumberingMode::Append,
+            1,
+            1,
+            3,
+            "_",
+            "",
+        )
+        .unwrap(),
+    )]);
+    let plan = build_plan(&state.borrow().groups(), &chain);
+    assert_eq!(plan.rename_rows(), 1_000);
+}
+
+#[test]
+fn same_stem_across_folders_forms_a_group_and_keeps_paths() {
+    use fancy_renamer::engine::{NumberingMode, NumberingRule, build_plan};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let dir = tree(&[("a/bild.jpg", "x"), ("b/bild.raw", "x")]);
+    let state: SharedState = Rc::new(RefCell::new(AppState::default()));
+    let scan = scan_folder(dir.path(), true);
+    assert_eq!(scan.files.len(), 2);
+    add_paths(&state, scan.files);
+
+    let groups = state.borrow().groups();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].members.len(), 2);
+
+    let chain = RuleChain::new(vec![Box::new(
+        NumberingRule::new(NumberingMode::Append, 1, 1, 3, "_", "").unwrap(),
+    )]);
+    let plan = build_plan(&groups, &chain);
+    assert_eq!(plan.rename_rows(), 2);
+    for row in &plan.rows {
+        // Jede Datei bleibt in ihrem Ordner.
+        assert_eq!(row.new_path.parent(), row.item.path.parent());
+        assert_eq!(row.new_stem, "bild_001");
+    }
 }
