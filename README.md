@@ -69,8 +69,14 @@ Vorschau ist ziehbar, der Regelbereich lässt sich so vergrößern. Jede Änderu
 Vorschau neu (entprellt), große Listen im Hintergrund. Zeilen mit Problemen (Kollision, doppelter
 Name, ungültiger Name) blockieren **Umbenennen** und nennen den Grund im Tooltip.
 
-Tastenkürzel: `Ctrl+O` Dateien, `Ctrl+Enter` umbenennen, `Ctrl+Entf` Liste leeren. Einzelne Zeilen
-entfernt der Knopf am Zeilenende.
+Tastenkürzel: `Ctrl+O` Dateien, `Ctrl+Enter` umbenennen, `Ctrl+Z` rückgängig, `Ctrl+Entf` Liste
+leeren. Einzelne Zeilen entfernt der Knopf am Zeilenende.
+
+Nach einem Lauf bietet die Leiste **Rückgängig** an, der Hinweis dazu enthält denselben Knopf. Das
+Journal der letzten 20 Läufe liegt in `XDG_STATE_HOME/fancy-renamer/journal.json` (ohne gesetzte
+Variable: `~/.local/state`) und überlebt Neustarts. Beim Zurücknehmen werden Dateien übersprungen,
+die sich seither geändert haben, deren Zielname fehlt oder deren Originalname wieder belegt ist; die
+Meldung nennt die Anzahl.
 
 ## Paare
 

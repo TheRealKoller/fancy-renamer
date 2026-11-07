@@ -6,6 +6,7 @@ mod error;
 mod execute;
 mod group;
 mod item;
+mod journal;
 mod plan;
 mod rule;
 mod rules;
@@ -15,6 +16,7 @@ pub use error::{ExecuteError, RuleError};
 pub use execute::{ExecutionReport, execute};
 pub use group::FileGroup;
 pub use item::FileItem;
+pub use journal::{Journal, JournalEntry, JournalRename, MAX_ENTRIES, UndoReport, UndoSkip, undo};
 pub use plan::{PlanRow, PlanStatus, RenamePlan, build_plan};
 pub use rule::{Rule, RuleChain, RuleContext, RuleOutcome};
 pub use rules::{
