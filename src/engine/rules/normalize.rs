@@ -1,4 +1,4 @@
-use crate::engine::{Rule, RuleContext, RuleError};
+use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Gewünschte Groß-/Kleinschreibung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55,7 +55,7 @@ impl Rule for NormalizeRule {
         "normalize"
     }
 
-    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<String, RuleError> {
+    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         let mut name = stem.to_string();
         if self.options.transliterate {
             name = transliterate(&name);
@@ -71,7 +71,7 @@ impl Rule for NormalizeRule {
                 .trim_matches(|c: char| c == '_' || c.is_whitespace())
                 .to_string();
         }
-        Ok(apply_case(&name, self.options.case))
+        Ok(RuleOutcome::Stem(apply_case(&name, self.options.case)))
     }
 }
 
