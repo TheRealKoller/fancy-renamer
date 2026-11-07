@@ -8,7 +8,9 @@ use gtk::gio;
 use gtk::prelude::*;
 use libadwaita::prelude::*;
 
-use crate::engine::{ExecutionReport, FileItem, RenamePlan, build_plan, execute};
+use crate::engine::{
+    ExecutionReport, FileItem, Journal, JournalEntry, RenamePlan, build_plan, execute, undo,
+};
 
 use super::rule_panel::RulePanel;
 use super::state::{AppState, SharedState};
@@ -66,6 +68,7 @@ pub fn run() -> Result<()> {
             ("win.open", vec!["<Control>o"]),
             ("win.rename", vec!["<Control>Return"]),
             ("win.clear", vec!["<Control>Delete"]),
+            ("win.undo", vec!["<Control>z"]),
         ] {
             app.set_accels_for_action(action, &accels);
         }
@@ -148,6 +151,11 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     summary.add_css_class("dim-label");
     summary.set_hexpand(true);
     summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let undo_button = gtk::Button::builder()
+        .icon_name("edit-undo-symbolic")
+        .tooltip_text("Letzte Umbenennung rückgängig machen (Ctrl+Z)")
+        .sensitive(false)
+        .build();
     let rename_button = gtk::Button::with_label("Umbenennen");
     rename_button.add_css_class("suggested-action");
     rename_button.set_sensitive(false);
@@ -159,6 +167,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     action_bar.set_margin_start(12);
     action_bar.set_margin_end(12);
     action_bar.append(&summary);
+    action_bar.append(&undo_button);
     action_bar.append(&rename_button);
 
     // Regeln und Vorschau teilen sich den Platz; die Trennlinie ist ziehbar,
@@ -380,6 +389,77 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         })
     };
 
+    // Journal der letzten Läufe und Rückgängig-Funktion.
+    let journal_path = gtk::glib::user_state_dir()
+        .join("fancy-renamer")
+        .join("journal.json");
+    let journal: Rc<RefCell<Journal>> = Rc::new(RefCell::new(Journal::load(&journal_path)));
+    let sync_undo = {
+        let journal = journal.clone();
+        let undo_button = undo_button.clone();
+        Rc::new(move || undo_button.set_sensitive(!journal.borrow().is_empty()))
+    };
+    let undo_last: Rc<dyn Fn()> = {
+        let state = state.clone();
+        let refresh = refresh.clone();
+        let journal = journal.clone();
+        let journal_path = journal_path.clone();
+        let toast_overlay = toast_overlay.clone();
+        let sync_undo = sync_undo.clone();
+        Rc::new(move || {
+            let Some(entry) = journal.borrow().last().cloned() else {
+                toast_overlay.add_toast(libadwaita::Toast::new(
+                    "Es gibt keine Umbenennung zum Rückgängigmachen",
+                ));
+                sync_undo();
+                return;
+            };
+            let result = undo(&entry);
+            match result {
+                Ok(report) => {
+                    {
+                        let mut journal = journal.borrow_mut();
+                        journal.pop();
+                        if let Err(error) = journal.save(&journal_path) {
+                            toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                                "Journal nicht schreibbar: {error}"
+                            )));
+                        }
+                    }
+                    {
+                        let mut state = state.borrow_mut();
+                        for (current, original) in &report.restored {
+                            if let Some(index) =
+                                state.items.iter().position(|item| &item.path == current)
+                            {
+                                if let Ok(item) = FileItem::from_path(original.clone()) {
+                                    state.items[index] = item;
+                                }
+                            }
+                        }
+                    }
+                    refresh();
+                    let mut text = format!("{} Datei(en) zurückbenannt", report.restored_count());
+                    if let Some(first) = report.skipped.first() {
+                        text.push_str(&format!(
+                            ", {} übersprungen ({})",
+                            report.skipped.len(),
+                            first.reason
+                        ));
+                    }
+                    toast_overlay.add_toast(libadwaita::Toast::new(&text));
+                    sync_undo();
+                }
+                Err(error) => {
+                    toast_overlay.add_toast(libadwaita::Toast::new(&format!("Fehler: {error}")));
+                }
+            }
+        })
+    };
+    sync_undo();
+    let undo_for_button = undo_last.clone();
+    undo_button.connect_clicked(move |_| undo_for_button());
+
     let clear_all: Rc<dyn Fn()> = {
         let state = state.clone();
         let refresh = refresh.clone();
@@ -395,6 +475,10 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         let state = state.clone();
         let refresh = refresh.clone();
         let toast_overlay = toast_overlay.clone();
+        let journal = journal.clone();
+        let journal_path = journal_path.clone();
+        let sync_undo = sync_undo.clone();
+        let undo_last = undo_last.clone();
         Rc::new(move || {
             let plan = state.borrow().plan.clone();
             if !state.borrow().can_rename() {
@@ -415,6 +499,10 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             let state = state.clone();
             let refresh = refresh.clone();
             let toast_overlay = toast_overlay.clone();
+            let journal = journal.clone();
+            let journal_path = journal_path.clone();
+            let sync_undo = sync_undo.clone();
+            let undo_last = undo_last.clone();
             dialog.connect_response(None, move |_, response| {
                 if response != "rename" {
                     return;
@@ -422,16 +510,34 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
                 let state = state.clone();
                 let refresh = refresh.clone();
                 let toast_overlay = toast_overlay.clone();
+                let journal = journal.clone();
+                let journal_path = journal_path.clone();
+                let sync_undo = sync_undo.clone();
+                let undo_last = undo_last.clone();
                 let plan = plan.clone();
                 let finish: FinishCallback = Rc::new(move |result| match result {
                     Ok(report) => {
                         apply_report(&state, &report);
                         refresh();
-                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                        if let Some(entry) = JournalEntry::from_report(&report) {
+                            let mut journal = journal.borrow_mut();
+                            journal.push(entry);
+                            if let Err(error) = journal.save(&journal_path) {
+                                toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                                    "Journal nicht schreibbar: {error}"
+                                )));
+                            }
+                        }
+                        sync_undo();
+                        let toast = libadwaita::Toast::new(&format!(
                             "{} Datei(en) umbenannt, {} unverändert",
                             report.renamed_count(),
                             report.skipped
-                        )));
+                        ));
+                        toast.set_button_label(Some("Rückgängig"));
+                        let undo_for_toast = undo_last.clone();
+                        toast.connect_button_clicked(move |_| undo_for_toast());
+                        toast_overlay.add_toast(toast);
                     }
                     Err(error) => {
                         toast_overlay
@@ -475,6 +581,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         ("open-folder", add_folder.clone()),
         ("clear", clear_all.clone()),
         ("rename", rename.clone()),
+        ("undo", undo_last.clone()),
     ] {
         let action = gio::SimpleAction::new(name, None);
         let callback = callback.clone();

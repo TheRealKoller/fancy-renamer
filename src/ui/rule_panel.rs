@@ -416,6 +416,8 @@ impl NumberingCard {
         digits_row.add_suffix(&digits);
 
         let (prefix_row, prefix) = entry_row("Präfix", "_");
+        // Standard-Trenner im Anhänge-Modus; „Stamm ersetzen“ blendet ihn aus.
+        prefix.set_text("_");
         let (suffix_row, suffix) = entry_row("Suffix", "");
 
         for row in [
