@@ -29,21 +29,28 @@ pub enum RuleOutcome {
 
 /// Transformiert den Dateistamm. Regeln sehen nur den Stamm und nie die
 /// Erweiterung; die Erweiterung setzt die Plan-Berechnung wieder an.
-pub trait Rule: std::fmt::Debug {
+///
+/// Regeln sind reine Daten ohne Zustand und dürfen deshalb gefahrlos in andere
+/// Threads wandern (Planberechnung im Hintergrund).
+pub trait Rule: std::fmt::Debug + Send + Sync {
     fn id(&self) -> &'static str;
 
     fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError>;
 }
 
 /// Geordnete Regelkette; jede Regel arbeitet auf dem Ergebnis der vorigen.
-#[derive(Debug, Default)]
+/// Die Regeln liegen hinter `Arc`, damit eine Kette günstig in einen
+/// Hintergrund-Thread wandern kann.
+#[derive(Debug, Default, Clone)]
 pub struct RuleChain {
-    rules: Vec<Box<dyn Rule>>,
+    rules: Vec<std::sync::Arc<dyn Rule>>,
 }
 
 impl RuleChain {
     pub fn new(rules: Vec<Box<dyn Rule>>) -> Self {
-        Self { rules }
+        Self {
+            rules: rules.into_iter().map(std::sync::Arc::from).collect(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {

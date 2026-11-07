@@ -6,9 +6,14 @@ use gtk::prelude::*;
 
 use fancy_renamer::engine::{ExifDateRule, ExifMode, MatchMode, ReplaceRule, RuleChain};
 use fancy_renamer::ui::file_list;
+use fancy_renamer::ui::file_list::RemoveHandler;
 use fancy_renamer::ui::rule_panel::RulePanel;
-use fancy_renamer::ui::state::{AppState, add_paths};
+use fancy_renamer::ui::state::{AppState, add_paths, build_plan_async};
 use tempfile::TempDir;
+
+fn noop_remove() -> RemoveHandler {
+    std::rc::Rc::new(|_| {})
+}
 
 fn try_init() -> bool {
     gtk::init().is_ok()
@@ -56,7 +61,7 @@ fn list_renders_group_header_for_pairs() {
     assert!(state.can_rename());
 
     let list = gtk::ListBox::new();
-    file_list::render(&list, &state.plan);
+    file_list::render(&list, &state.plan, &noop_remove());
 
     // Gruppenkopf + 2 Paar-Dateien + 1 Einzeldatei = 4 Zeilen
     let mut rows = Vec::new();
@@ -140,6 +145,80 @@ fn missing_metadata_is_shown_as_skipped() {
     assert!(skipped.note.clone().unwrap_or_default().contains("EXIF"));
 
     let list = gtk::ListBox::new();
-    file_list::render(&list, &state.plan);
+    file_list::render(&list, &state.plan, &noop_remove());
     assert_eq!(list.observe_children().n_items(), 2);
+}
+
+#[test]
+fn remove_button_reports_the_clicked_file() {
+    if !try_init() {
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("weg.jpg");
+    fs::write(&path, b"x").unwrap();
+    let mut state = AppState {
+        items: vec![fancy_renamer::engine::FileItem::from_path(&path).unwrap()],
+        ..Default::default()
+    };
+    state.refresh();
+
+    let removed: std::rc::Rc<std::cell::RefCell<Option<std::path::PathBuf>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let recorder = removed.clone();
+    let handler: RemoveHandler = std::rc::Rc::new(move |clicked| {
+        *recorder.borrow_mut() = Some(clicked.to_path_buf());
+    });
+
+    let list = gtk::ListBox::new();
+    file_list::render(&list, &state.plan, &handler);
+
+    let row = list
+        .first_child()
+        .unwrap()
+        .downcast::<gtk::ListBoxRow>()
+        .unwrap();
+    let line = row.child().unwrap();
+    let button = line
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    button.emit_clicked();
+
+    assert_eq!(removed.borrow().as_deref(), Some(path.as_path()));
+}
+
+#[test]
+fn large_plans_are_computed_in_the_background() {
+    if !try_init() {
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let items = (0..120)
+        .map(|index| {
+            let path = dir.path().join(format!("f{index:03}.jpg"));
+            fs::write(&path, b"x").unwrap();
+            fancy_renamer::engine::FileItem::from_path(path).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let groups = fancy_renamer::engine::FileGroup::from_items(&items);
+    let chain = RuleChain::new(vec![Box::new(
+        ReplaceRule::new(MatchMode::Literal, "f", "bild", false, false).unwrap(),
+    )]);
+
+    let done = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = done.clone();
+    build_plan_async(groups, chain, move |plan| {
+        assert_eq!(plan.rename_rows(), 120);
+        flag.set(true);
+    });
+
+    let context = gtk::glib::MainContext::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done.get() && std::time::Instant::now() < deadline {
+        context.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(done.get(), "Hintergrundberechnung lieferte kein Ergebnis");
 }

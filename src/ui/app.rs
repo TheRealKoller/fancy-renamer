@@ -8,7 +8,7 @@ use gtk::gio;
 use gtk::prelude::*;
 use libadwaita::prelude::*;
 
-use crate::engine::{ExecutionReport, FileItem, execute};
+use crate::engine::{ExecutionReport, FileItem, RenamePlan, build_plan, execute};
 
 use super::rule_panel::RulePanel;
 use super::state::{AppState, SharedState};
@@ -134,6 +134,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     summary.set_xalign(0.0);
     summary.add_css_class("dim-label");
     summary.set_hexpand(true);
+    summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
     let rename_button = gtk::Button::with_label("Umbenennen");
     rename_button.add_css_class("suggested-action");
     rename_button.set_sensitive(false);
@@ -174,30 +175,28 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         .content(&toast_overlay)
         .build();
 
-    // Vorschau neu berechnen (entprellt, damit Tippen nicht jedes Zeichen rechnet)
-    let refresh: Rc<dyn Fn()> = {
+    // Inhalt der Vorschau aus dem Zustand zeichnen.
+    let refresh_slot: ChangeSlot = Rc::new(RefCell::new(None));
+    let remove: file_list::RemoveHandler = {
         let state = state.clone();
-        let panel = panel.clone();
+        let refresh_slot = refresh_slot.clone();
+        Rc::new(move |path| {
+            state.borrow_mut().items.retain(|item| item.path != path);
+            if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                refresh();
+            }
+        })
+    };
+    let render: Rc<dyn Fn()> = {
+        let state = state.clone();
         let list = list.clone();
         let stack = stack.clone();
         let summary = summary.clone();
         let rename_button = rename_button.clone();
+        let remove = remove.clone();
         Rc::new(move || {
-            let mut state = state.borrow_mut();
-            match panel.build_chain() {
-                Ok(chain) => {
-                    state.chain = Some(chain);
-                    state.chain_error = None;
-                }
-                Err(error) => {
-                    state.chain = None;
-                    state.chain_error = Some(error);
-                }
-            }
-            state.refresh();
-
-            file_list::render(&list, &state.plan);
-            panel.show_error(state.chain_error.as_deref());
+            let state = state.borrow();
+            file_list::render(&list, &state.plan, &remove);
             summary.set_text(&summary_text(&state));
             rename_button.set_sensitive(state.can_rename());
             rename_button.set_tooltip_text(Some(&tooltip(&state)));
@@ -208,6 +207,57 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             });
         })
     };
+
+    // Vorschau neu berechnen: Regeln einlesen, Plan bauen (bei vielen Dateien
+    // im Hintergrund), dann zeichnen.
+    let refresh: Rc<dyn Fn()> = {
+        let state = state.clone();
+        let panel = panel.clone();
+        let render = render.clone();
+        Rc::new(move || {
+            let (groups, chain, generation) = {
+                let mut state = state.borrow_mut();
+                match panel.build_chain() {
+                    Ok(chain) => {
+                        state.chain = Some(chain);
+                        state.chain_error = None;
+                    }
+                    Err(error) => {
+                        state.chain = None;
+                        state.chain_error = Some(error);
+                    }
+                }
+                state.plan_generation += 1;
+                (state.groups(), state.chain.clone(), state.plan_generation)
+            };
+            panel.show_error(state.borrow().chain_error.as_deref());
+
+            let Some(chain) = chain else {
+                state.borrow_mut().plan = RenamePlan::default();
+                render();
+                return;
+            };
+
+            if groups.len() > 100 {
+                let state = state.clone();
+                let render = render.clone();
+                state::build_plan_async(groups, chain, move |plan| {
+                    let mut state = state.borrow_mut();
+                    if state.plan_generation != generation {
+                        return;
+                    }
+                    state.plan = plan;
+                    drop(state);
+                    render();
+                });
+            } else {
+                let plan = build_plan(&groups, &chain);
+                state.borrow_mut().plan = plan;
+                render();
+            }
+        })
+    };
+    *refresh_slot.borrow_mut() = Some(refresh.clone());
 
     // Entprellung: höchstens alle 150 ms neu rechnen
     let pending = Rc::new(Cell::new(false));

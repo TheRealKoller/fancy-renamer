@@ -1,10 +1,16 @@
+use std::path::Path;
+use std::rc::Rc;
+
 use gtk::prelude::*;
 
 use crate::engine::{PlanStatus, RenamePlan};
 
+/// Wird aufgerufen, wenn eine Datei aus der Liste entfernt werden soll.
+pub type RemoveHandler = Rc<dyn Fn(&Path)>;
+
 /// Baut die Vorschau-Liste: pro Gruppe eine Kopfzeile (nur bei Paaren) und je
 /// Datei eine Zeile mit altem Namen, Zielnamen und Status.
-pub fn render(list: &gtk::ListBox, plan: &RenamePlan) {
+pub fn render(list: &gtk::ListBox, plan: &RenamePlan, on_remove: &RemoveHandler) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
@@ -24,7 +30,7 @@ pub fn render(list: &gtk::ListBox, plan: &RenamePlan) {
             list.append(&group_header(plan, start));
         }
         for row in group_rows {
-            list.append(&file_row(row, group_rows.len() > 1));
+            list.append(&file_row(row, group_rows.len() > 1, on_remove));
         }
         index = end;
     }
@@ -58,7 +64,11 @@ fn group_header(plan: &RenamePlan, start: usize) -> gtk::ListBoxRow {
     item_row
 }
 
-fn file_row(row: &crate::engine::PlanRow, indented: bool) -> gtk::ListBoxRow {
+fn file_row(
+    row: &crate::engine::PlanRow,
+    indented: bool,
+    on_remove: &RemoveHandler,
+) -> gtk::ListBoxRow {
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     line.set_margin_top(6);
     line.set_margin_bottom(6);
@@ -102,10 +112,21 @@ fn file_row(row: &crate::engine::PlanRow, indented: bool) -> gtk::ListBoxRow {
         status.set_text("Regelfehler");
     }
 
+    let remove = gtk::Button::builder()
+        .icon_name("list-remove-symbolic")
+        .tooltip_text("Aus der Liste entfernen")
+        .valign(gtk::Align::Center)
+        .build();
+    remove.add_css_class("flat");
+    let path = row.item.path.clone();
+    let on_remove = on_remove.clone();
+    remove.connect_clicked(move |_| on_remove(&path));
+
     line.append(&old_name);
     line.append(&arrow);
     line.append(&new_name);
     line.append(&status);
+    line.append(&remove);
 
     let item_row = gtk::ListBoxRow::new();
     item_row.set_activatable(false);
