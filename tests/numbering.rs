@@ -1,6 +1,6 @@
 use fancy_renamer::engine::{
     FileGroup, FileItem, NumberingMode, NumberingRule, PlanStatus, Rule, RuleChain, RuleContext,
-    RuleError, build_plan, execute,
+    RuleError, RuleOutcome, build_plan, execute,
 };
 use std::fs;
 use std::path::Path;
@@ -25,8 +25,8 @@ impl Rule for Prefix {
         "test.prefix"
     }
 
-    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<String, RuleError> {
-        Ok(format!("{}{stem}", self.0))
+    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
+        Ok(RuleOutcome::Stem(format!("{}{stem}", self.0)))
     }
 }
 

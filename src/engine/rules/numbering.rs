@@ -1,4 +1,4 @@
-use crate::engine::{Rule, RuleContext, RuleError};
+use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Ersetzt den Stamm durch die Nummer oder hängt sie an.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,12 +78,12 @@ impl Rule for NumberingRule {
         "numbering"
     }
 
-    fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<String, RuleError> {
+    fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         let number = self.number_for(ctx.group_index);
         let inserted = format!("{}{number}{}", self.prefix, self.suffix);
-        Ok(match self.mode {
+        Ok(RuleOutcome::Stem(match self.mode {
             NumberingMode::Replace => inserted,
             NumberingMode::Append => format!("{stem}{inserted}"),
-        })
+        }))
     }
 }

@@ -17,12 +17,22 @@ pub struct RuleContext<'a> {
     pub member_index: usize,
 }
 
+/// Ergebnis einer Regel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleOutcome {
+    /// Neuer Stamm.
+    Stem(String),
+    /// Regel kann diese Datei nicht bearbeiten (z. B. keine EXIF-Daten);
+    /// die Datei bleibt unverändert, die restliche Kette wird übersprungen.
+    Skip(&'static str),
+}
+
 /// Transformiert den Dateistamm. Regeln sehen nur den Stamm und nie die
 /// Erweiterung; die Erweiterung setzt die Plan-Berechnung wieder an.
 pub trait Rule: std::fmt::Debug {
     fn id(&self) -> &'static str;
 
-    fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<String, RuleError>;
+    fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError>;
 }
 
 /// Geordnete Regelkette; jede Regel arbeitet auf dem Ergebnis der vorigen.
@@ -40,11 +50,14 @@ impl RuleChain {
         self.rules.is_empty()
     }
 
-    pub fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<String, RuleError> {
+    pub fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         let mut current = stem.to_string();
         for rule in &self.rules {
-            current = rule.apply(&current, ctx)?;
+            match rule.apply(&current, ctx)? {
+                RuleOutcome::Stem(next) => current = next,
+                skip @ RuleOutcome::Skip(_) => return Ok(skip),
+            }
         }
-        Ok(current)
+        Ok(RuleOutcome::Stem(current))
     }
 }

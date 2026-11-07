@@ -3,7 +3,7 @@ use std::path::Path;
 
 use fancy_renamer::engine::{
     ExecuteError, FileGroup, FileItem, PlanStatus, Rule, RuleChain, RuleContext, RuleError,
-    build_plan, execute,
+    RuleOutcome, build_plan, execute,
 };
 use tempfile::TempDir;
 
@@ -16,8 +16,8 @@ impl Rule for Replace {
         "test.replace"
     }
 
-    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<String, RuleError> {
-        Ok(stem.replace(self.0, self.1))
+    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
+        Ok(RuleOutcome::Stem(stem.replace(self.0, self.1)))
     }
 }
 
@@ -30,8 +30,8 @@ impl Rule for FixedTargets {
         "test.fixed"
     }
 
-    fn apply(&self, _stem: &str, ctx: &RuleContext<'_>) -> Result<String, RuleError> {
-        Ok(self.0[ctx.index].clone())
+    fn apply(&self, _stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
+        Ok(RuleOutcome::Stem(self.0[ctx.index].clone()))
     }
 }
 
@@ -43,7 +43,7 @@ impl Rule for FailingRule {
         "test.failing"
     }
 
-    fn apply(&self, _stem: &str, _ctx: &RuleContext<'_>) -> Result<String, RuleError> {
+    fn apply(&self, _stem: &str, _ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         Err(RuleError::InvalidPattern("kaputt".into()))
     }
 }

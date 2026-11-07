@@ -15,7 +15,8 @@ pub use execute::{ExecutionReport, execute};
 pub use group::FileGroup;
 pub use item::FileItem;
 pub use plan::{PlanRow, PlanStatus, RenamePlan, build_plan};
-pub use rule::{Rule, RuleChain, RuleContext};
+pub use rule::{Rule, RuleChain, RuleContext, RuleOutcome};
 pub use rules::{
-    CaseMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode, NumberingRule, ReplaceRule,
+    CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
+    NumberingRule, ReplaceRule,
 };

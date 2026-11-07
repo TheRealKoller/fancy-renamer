@@ -1,6 +1,6 @@
 use regex::{Regex, RegexBuilder};
 
-use crate::engine::{Rule, RuleContext, RuleError};
+use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Wörtliche Ersetzung oder regulärer Ausdruck.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,23 +92,25 @@ impl Rule for ReplaceRule {
         "replace"
     }
 
-    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<String, RuleError> {
+    fn apply(&self, stem: &str, _ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         let Some(regex) = &self.compiled else {
-            return Ok(stem.to_string());
+            return Ok(RuleOutcome::Stem(stem.to_string()));
         };
-        Ok(match (&self.replacement, self.first_only) {
-            (Replacement::Literal(text), true) => {
-                regex.replacen(stem, 1, regex::NoExpand(text)).into_owned()
-            }
-            (Replacement::Literal(text), false) => {
-                regex.replace_all(stem, regex::NoExpand(text)).into_owned()
-            }
-            (Replacement::Template(text), true) => {
-                regex.replacen(stem, 1, text.as_str()).into_owned()
-            }
-            (Replacement::Template(text), false) => {
-                regex.replace_all(stem, text.as_str()).into_owned()
-            }
-        })
+        Ok(RuleOutcome::Stem(
+            match (&self.replacement, self.first_only) {
+                (Replacement::Literal(text), true) => {
+                    regex.replacen(stem, 1, regex::NoExpand(text)).into_owned()
+                }
+                (Replacement::Literal(text), false) => {
+                    regex.replace_all(stem, regex::NoExpand(text)).into_owned()
+                }
+                (Replacement::Template(text), true) => {
+                    regex.replacen(stem, 1, text.as_str()).into_owned()
+                }
+                (Replacement::Template(text), false) => {
+                    regex.replace_all(stem, text.as_str()).into_owned()
+                }
+            },
+        ))
     }
 }
