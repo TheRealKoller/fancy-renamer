@@ -2,6 +2,7 @@
 
 mod app;
 pub mod file_list;
+pub mod presets;
 pub mod rule_panel;
 pub mod state;
 

@@ -1,9 +1,11 @@
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 
 use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Wörtliche Ersetzung oder regulärer Ausdruck.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     Literal,
     Regex,

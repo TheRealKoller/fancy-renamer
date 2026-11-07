@@ -3,11 +3,13 @@ use std::io::BufReader;
 use std::path::Path;
 
 use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
 
 use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Ersetzt den Stamm durch das Aufnahmedatum oder stellt es voran.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExifMode {
     Replace,
     Prefix,

@@ -549,3 +549,103 @@ fn large_plans_are_computed_in_the_background() {
         assert!(done.get(), "Hintergrundberechnung lieferte kein Ergebnis");
     });
 }
+
+#[test]
+fn loading_a_preset_replaces_chain_order_and_parameters() {
+    ui(|| {
+        use fancy_renamer::engine::{CaseMode, NumberingMode, Preset, RuleOutcome, RulePreset};
+
+        let panel = RulePanel::new(|| {});
+        let photos = Preset {
+            name: "Fotos".into(),
+            rules: vec![
+                RulePreset::Normalize {
+                    case: CaseMode::Upper,
+                    spaces_to_underscore: false,
+                    trim_separators: false,
+                    transliterate: false,
+                    strip_special: false,
+                },
+                RulePreset::Numbering {
+                    mode: NumberingMode::Append,
+                    start: 5,
+                    step: 2,
+                    digits: 4,
+                    prefix: "-".into(),
+                    suffix: String::new(),
+                },
+            ],
+        };
+        panel.apply_preset(&photos);
+        assert_eq!(panel.snapshot(), photos.rules);
+        let chain = panel.build_chain().unwrap();
+        assert_eq!(chain.ids(), vec!["normalize", "numbering"]);
+        let context = fancy_renamer::engine::RuleContext {
+            path: std::path::Path::new("foto.jpg"),
+            original_stem: "foto",
+            index: 0,
+            group_index: 0,
+            group_size: 1,
+            member_index: 0,
+        };
+        assert_eq!(
+            chain.apply("foto", &context).unwrap(),
+            RuleOutcome::Stem("FOTO-0005".into())
+        );
+
+        // Ein Preset mit nur einer Regel ersetzt die Kette vollständig.
+        let single = Preset {
+            name: "Nur ersetzen".into(),
+            rules: vec![RulePreset::Replace {
+                mode: MatchMode::Literal,
+                pattern: "IMG".into(),
+                replacement: "Foto".into(),
+                case_insensitive: false,
+                first_only: false,
+            }],
+        };
+        panel.apply_preset(&single);
+        assert_eq!(panel.snapshot(), single.rules);
+        assert_eq!(panel.build_chain().unwrap().ids(), vec!["replace"]);
+    });
+}
+
+#[test]
+fn preset_menu_lists_saved_presets() {
+    ui(|| {
+        use fancy_renamer::engine::{Preset, Presets};
+
+        let mut presets = Presets::default();
+        presets
+            .upsert(Preset {
+                name: "Fotos".into(),
+                rules: vec![],
+            })
+            .unwrap();
+        presets
+            .upsert(Preset {
+                name: "Musik".into(),
+                rules: vec![],
+            })
+            .unwrap();
+        assert_eq!(
+            fancy_renamer::ui::presets::entry_labels(&presets),
+            vec!["Fotos".to_string(), "Musik".to_string()]
+        );
+        assert_eq!(
+            format!("win.{}", fancy_renamer::ui::presets::LOAD_ACTION_NAME),
+            fancy_renamer::ui::presets::LOAD_ACTION
+        );
+        let menu = fancy_renamer::ui::presets::menu(&presets);
+        // Abschnitt mit Einträgen plus Verwaltungsabschnitt.
+        assert_eq!(menu.n_items(), 2);
+
+        let empty = fancy_renamer::ui::presets::menu(&Presets::default());
+        assert_eq!(empty.n_items(), 2);
+
+        // Der Menüknopf akzeptiert das Modell.
+        let button = gtk::MenuButton::new();
+        button.set_menu_model(Some(&menu));
+        assert!(button.menu_model().is_some());
+    });
+}

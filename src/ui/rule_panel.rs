@@ -6,7 +6,7 @@ use libadwaita::prelude::*;
 
 use crate::engine::{
     CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
-    NumberingRule, ReplaceRule, Rule, RuleChain,
+    NumberingRule, Preset, ReplaceRule, Rule, RuleChain, RulePreset,
 };
 
 type ChangeHandler = Rc<dyn Fn()>;
@@ -19,12 +19,20 @@ pub struct RulePanel {
     cards: RefCell<Vec<CardEntry>>,
     error_label: gtk::Label,
     on_change: ChangeHandler,
+    presets_button: gtk::MenuButton,
+    save_preset_button: gtk::Button,
 }
 
 /// Eine Regelkarte: Widget, Aktivierung und die daraus gebaute Regel.
 trait RuleCard {
     fn expander(&self) -> &libadwaita::ExpanderRow;
     fn enabled(&self) -> bool;
+    fn set_enabled(&self, enabled: bool);
+    fn rule_id(&self) -> &'static str;
+    /// Aktuelle Parameter, unabhängig davon, ob die Karte aktiv ist.
+    fn snapshot(&self) -> RulePreset;
+    /// Übernimmt Parameter aus einem Preset; fremde Regelarten bleiben unberührt.
+    fn apply_preset(&self, preset: &RulePreset);
     fn build(&self) -> Result<Box<dyn Rule>, String>;
 }
 
@@ -43,6 +51,19 @@ impl RulePanel {
         container.set_margin_bottom(12);
         container.set_margin_start(12);
         container.set_margin_end(12);
+        let presets_button = gtk::MenuButton::builder()
+            .label("Presets")
+            .tooltip_text("Gespeicherte Regelketten laden oder verwalten")
+            .build();
+        let save_preset_button = gtk::Button::builder()
+            .icon_name("document-save-symbolic")
+            .tooltip_text("Aktuelle Regeln als Preset speichern")
+            .build();
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        header.set_halign(gtk::Align::Start);
+        header.append(&presets_button);
+        header.append(&save_preset_button);
+        container.append(&header);
 
         let hint = gtk::Label::new(Some(
             "Regeln werden von oben nach unten angewendet – jede Regel arbeitet auf dem \
@@ -118,8 +139,9 @@ impl RulePanel {
             cards: RefCell::new(entries),
             error_label,
             on_change,
+            presets_button,
+            save_preset_button,
         });
-
         let weak = Rc::downgrade(&panel);
         let external = panel.on_change.clone();
         *notify.borrow_mut() = Some(Rc::new(move || {
@@ -134,9 +156,91 @@ impl RulePanel {
         panel.sync_ordinals();
         panel
     }
-
     pub fn widget(&self) -> &gtk::Box {
         &self.container
+    }
+
+    /// Menüknopf für gespeicherte Presets; Inhalt setzt das Fenster.
+    pub fn presets_button(&self) -> &gtk::MenuButton {
+        &self.presets_button
+    }
+
+    /// Knopf „Aktuelle Regeln als Preset speichern“.
+    pub fn save_preset_button(&self) -> &gtk::Button {
+        &self.save_preset_button
+    }
+
+    /// Aktive Regeln samt Parametern in Anwendungsreihenfolge.
+    pub fn snapshot(&self) -> Vec<RulePreset> {
+        self.cards
+            .borrow()
+            .iter()
+            .filter(|entry| entry.card.enabled())
+            .map(|entry| entry.card.snapshot())
+            .collect()
+    }
+
+    /// Ersetzt die Kette vollständig: Reihenfolge, Parameter und Auswahl
+    /// kommen aus dem Preset; nicht enthaltene Regeln werden deaktiviert.
+    pub fn apply_preset(&self, preset: &Preset) {
+        let order = {
+            let cards = self.cards.borrow();
+            let mut order: Vec<usize> = Vec::new();
+            for rule in &preset.rules {
+                if let Some(index) = cards
+                    .iter()
+                    .position(|entry| entry.card.rule_id() == rule.rule_id())
+                {
+                    if !order.contains(&index) {
+                        order.push(index);
+                    }
+                }
+            }
+            for index in 0..cards.len() {
+                if !order.contains(&index) {
+                    order.push(index);
+                }
+            }
+            order
+        };
+        for entry in self.cards.borrow().iter() {
+            let rule = preset
+                .rules
+                .iter()
+                .find(|rule| rule.rule_id() == entry.card.rule_id());
+            if let Some(rule) = rule {
+                entry.card.apply_preset(rule);
+            }
+            entry.card.set_enabled(rule.is_some());
+        }
+        self.reorder(&order);
+        self.sync_buttons();
+        self.sync_ordinals();
+        (self.on_change)();
+    }
+
+    /// Karten in die übergebene Reihenfolge bringen; fehlende Indizes bleiben
+    /// in ihrer alten relativen Ordnung am Ende.
+    fn reorder(&self, order: &[usize]) {
+        {
+            let mut cards = self.cards.borrow_mut();
+            let mut slots: Vec<Option<CardEntry>> =
+                std::mem::take(&mut *cards).into_iter().map(Some).collect();
+            let mut sorted = Vec::with_capacity(slots.len());
+            for index in order {
+                if let Some(entry) = slots.get_mut(*index).and_then(Option::take) {
+                    sorted.push(entry);
+                }
+            }
+            sorted.extend(slots.into_iter().flatten());
+            *cards = sorted;
+        }
+        let mut anchor: gtk::Widget = self.hint.clone().upcast();
+        for entry in self.cards.borrow().iter() {
+            self.container
+                .reorder_child_after(entry.card.expander(), Some(&anchor));
+            anchor = entry.card.expander().clone().upcast();
+        }
     }
 
     /// Regelkette in der sichtbaren Reihenfolge; Fehler blockieren die Vorschau.
@@ -347,14 +451,54 @@ impl ReplaceCard {
         self.switch.is_active()
     }
 
-    fn build_rule(&self) -> Result<ReplaceRule, String> {
-        let mode = if self.mode.selected() == 1 {
+    fn rule_id(&self) -> &'static str {
+        "replace"
+    }
+
+    fn match_mode(&self) -> MatchMode {
+        if self.mode.selected() == 1 {
             MatchMode::Regex
         } else {
             MatchMode::Literal
-        };
-        ReplaceRule::new(
+        }
+    }
+
+    fn snapshot(&self) -> RulePreset {
+        RulePreset::Replace {
+            mode: self.match_mode(),
+            pattern: self.pattern.text().to_string(),
+            replacement: self.replacement.text().to_string(),
+            case_insensitive: self.case_insensitive.is_active(),
+            first_only: self.first_only.is_active(),
+        }
+    }
+
+    fn apply_preset(&self, preset: &RulePreset) {
+        let RulePreset::Replace {
             mode,
+            pattern,
+            replacement,
+            case_insensitive,
+            first_only,
+        } = preset
+        else {
+            return;
+        };
+        self.mode
+            .set_selected(if *mode == MatchMode::Regex { 1 } else { 0 });
+        self.pattern.set_text(pattern);
+        self.replacement.set_text(replacement);
+        self.case_insensitive.set_active(*case_insensitive);
+        self.first_only.set_active(*first_only);
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.switch.set_active(enabled);
+    }
+
+    fn build_rule(&self) -> Result<ReplaceRule, String> {
+        ReplaceRule::new(
+            self.match_mode(),
             self.pattern.text().to_string(),
             self.replacement.text().to_string(),
             self.case_insensitive.is_active(),
@@ -462,28 +606,76 @@ impl NumberingCard {
         self.switch.is_active()
     }
 
-    fn build_rule(&self) -> Result<NumberingRule, String> {
-        let mode = if self.mode.selected() == 1 {
+    fn rule_id(&self) -> &'static str {
+        "numbering"
+    }
+
+    fn numbering_mode(&self) -> NumberingMode {
+        if self.mode.selected() == 1 {
             NumberingMode::Append
         } else {
             NumberingMode::Replace
-        };
-        let default_prefix = match mode {
-            NumberingMode::Replace => String::new(),
-            NumberingMode::Append => "_".to_string(),
-        };
-        // "_" ist der Standard-Trenner: im Anhänge-Modus bleibt er, im
-        // Ersetzen-Modus entfällt er.
-        let mut prefix = self.prefix.text().to_string();
-        if prefix == "_" {
-            prefix = default_prefix;
         }
-        NumberingRule::new(
+    }
+
+    /// Wirkendes Präfix: `_` steht für den Standard-Trenner beim Anhängen und
+    /// entfällt beim Ersetzen.
+    fn effective_prefix(&self) -> String {
+        let prefix = self.prefix.text().to_string();
+        if prefix != "_" {
+            return prefix;
+        }
+        match self.numbering_mode() {
+            NumberingMode::Replace => String::new(),
+            NumberingMode::Append => prefix,
+        }
+    }
+
+    fn snapshot(&self) -> RulePreset {
+        RulePreset::Numbering {
+            mode: self.numbering_mode(),
+            start: self.start.value() as u64,
+            step: self.step.value() as u64,
+            digits: self.digits.value() as usize,
+            prefix: self.effective_prefix(),
+            suffix: self.suffix.text().to_string(),
+        }
+    }
+
+    fn apply_preset(&self, preset: &RulePreset) {
+        let RulePreset::Numbering {
             mode,
+            start,
+            step,
+            digits,
+            prefix,
+            suffix,
+        } = preset
+        else {
+            return;
+        };
+        self.mode.set_selected(match mode {
+            NumberingMode::Replace => 0,
+            NumberingMode::Append => 1,
+        });
+        self.start.set_value(*start as f64);
+        self.step.set_value(*step as f64);
+        self.digits.set_value(*digits as f64);
+        self.prefix.set_text(prefix);
+        self.suffix.set_text(suffix);
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.switch.set_active(enabled);
+    }
+
+    fn build_rule(&self) -> Result<NumberingRule, String> {
+        NumberingRule::new(
+            self.numbering_mode(),
             self.start.value() as u64,
             self.step.value() as u64,
             self.digits.value() as usize,
-            prefix,
+            self.effective_prefix(),
             self.suffix.text().to_string(),
         )
         .map_err(|error| error.to_string())
@@ -554,16 +746,61 @@ impl NormalizeCard {
         self.switch.is_active()
     }
 
-    fn build_rule(&self) -> Result<NormalizeRule, String> {
-        let case = match self.case.selected() {
+    fn rule_id(&self) -> &'static str {
+        "normalize"
+    }
+
+    fn case_mode(&self) -> CaseMode {
+        match self.case.selected() {
             1 => CaseMode::Lower,
             2 => CaseMode::Upper,
             3 => CaseMode::Title,
             4 => CaseMode::Sentence,
             _ => CaseMode::Keep,
-        };
-        Ok(NormalizeRule::new(NormalizeOptions {
+        }
+    }
+
+    fn snapshot(&self) -> RulePreset {
+        RulePreset::Normalize {
+            case: self.case_mode(),
+            spaces_to_underscore: self.spaces.is_active(),
+            trim_separators: self.trim.is_active(),
+            transliterate: self.transliterate.is_active(),
+            strip_special: self.strip.is_active(),
+        }
+    }
+
+    fn apply_preset(&self, preset: &RulePreset) {
+        let RulePreset::Normalize {
             case,
+            spaces_to_underscore,
+            trim_separators,
+            transliterate,
+            strip_special,
+        } = preset
+        else {
+            return;
+        };
+        self.case.set_selected(match case {
+            CaseMode::Keep => 0,
+            CaseMode::Lower => 1,
+            CaseMode::Upper => 2,
+            CaseMode::Title => 3,
+            CaseMode::Sentence => 4,
+        });
+        self.spaces.set_active(*spaces_to_underscore);
+        self.trim.set_active(*trim_separators);
+        self.transliterate.set_active(*transliterate);
+        self.strip.set_active(*strip_special);
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.switch.set_active(enabled);
+    }
+
+    fn build_rule(&self) -> Result<NormalizeRule, String> {
+        Ok(NormalizeRule::new(NormalizeOptions {
+            case: self.case_mode(),
             spaces_to_underscore: self.spaces.is_active(),
             trim_separators: self.trim.is_active(),
             transliterate: self.transliterate.is_active(),
@@ -610,19 +847,52 @@ impl ExifCard {
         self.switch.is_active()
     }
 
-    fn build_rule(&self) -> Result<ExifDateRule, String> {
-        let mode = if self.mode.selected() == 1 {
+    fn rule_id(&self) -> &'static str {
+        "exif_date"
+    }
+
+    fn exif_mode(&self) -> ExifMode {
+        if self.mode.selected() == 1 {
             ExifMode::Prefix
         } else {
             ExifMode::Replace
-        };
+        }
+    }
+
+    fn effective_format(&self) -> String {
         let format = self.format.text().to_string();
-        let format = if format.is_empty() {
+        if format.is_empty() {
             "%Y-%m-%d_%H-%M-%S".to_string()
         } else {
             format
+        }
+    }
+
+    fn snapshot(&self) -> RulePreset {
+        RulePreset::ExifDate {
+            format: self.effective_format(),
+            mode: self.exif_mode(),
+        }
+    }
+
+    fn apply_preset(&self, preset: &RulePreset) {
+        let RulePreset::ExifDate { format, mode } = preset else {
+            return;
         };
-        ExifDateRule::new(format, mode).map_err(|error| error.to_string())
+        self.mode.set_selected(match mode {
+            ExifMode::Replace => 0,
+            ExifMode::Prefix => 1,
+        });
+        self.format.set_text(format);
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.switch.set_active(enabled);
+    }
+
+    fn build_rule(&self) -> Result<ExifDateRule, String> {
+        ExifDateRule::new(self.effective_format(), self.exif_mode())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -650,6 +920,22 @@ macro_rules! impl_rule_card {
 
             fn enabled(&self) -> bool {
                 <$card>::enabled(self)
+            }
+
+            fn set_enabled(&self, enabled: bool) {
+                <$card>::set_enabled(self, enabled)
+            }
+
+            fn rule_id(&self) -> &'static str {
+                <$card>::rule_id(self)
+            }
+
+            fn snapshot(&self) -> RulePreset {
+                <$card>::snapshot(self)
+            }
+
+            fn apply_preset(&self, preset: &RulePreset) {
+                <$card>::apply_preset(self, preset)
             }
 
             fn build(&self) -> Result<Box<dyn Rule>, String> {

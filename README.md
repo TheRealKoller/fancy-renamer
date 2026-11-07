@@ -69,6 +69,15 @@ Vorschau ist ziehbar, der Regelbereich lässt sich so vergrößern. Jede Änderu
 Vorschau neu (entprellt), große Listen im Hintergrund. Zeilen mit Problemen (Kollision, doppelter
 Name, ungültiger Name) blockieren **Umbenennen** und nennen den Grund im Tooltip.
 
+Über **Presets** im Kopf des Regelbereichs lassen sich Regelketten benennen, wieder laden,
+umbenennen und löschen; der Knopf daneben speichert die aktuell aktiven Regeln samt aller
+Parameter. Ein Preset enthält nur Regeln, keine Dateipfade. Gespeichert wird in
+`XDG_CONFIG_HOME/fancy-renamer/presets.json` (ohne gesetzte Variable: `~/.config`); eine fehlende
+oder defekte Datei ergibt eine leere Liste. **Presets exportieren** und **importieren** schreiben
+beziehungsweise lesen dieselbe JSON-Struktur; beim Import überschreiben gleiche Namen vorhandene
+Presets. Laden ersetzt die Kette vollständig: Reihenfolge und Parameter kommen aus dem Preset,
+nicht enthaltene Regeln werden abgeschaltet.
+
 Tastenkürzel: `Ctrl+O` Dateien, `Ctrl+Enter` umbenennen, `Ctrl+Z` rückgängig, `Ctrl+Entf` Liste
 leeren. Einzelne Zeilen entfernt der Knopf am Zeilenende.
 

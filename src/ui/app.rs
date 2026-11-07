@@ -9,9 +9,11 @@ use gtk::prelude::*;
 use libadwaita::prelude::*;
 
 use crate::engine::{
-    ExecutionReport, FileItem, Journal, JournalEntry, RenamePlan, build_plan, execute, undo,
+    ExecutionReport, FileItem, Journal, JournalEntry, PRESET_FILE, Preset, Presets, RenamePlan,
+    build_plan, execute, undo, validate_name,
 };
 
+use super::presets as presets_menu;
 use super::rule_panel::RulePanel;
 use super::state::{AppState, SharedState};
 use super::{file_list, state};
@@ -469,6 +471,369 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         })
     };
 
+    // Presets: benannte Regelketten in XDG_CONFIG_HOME/fancy-renamer/presets.json
+    let presets_path = gtk::glib::user_config_dir()
+        .join("fancy-renamer")
+        .join(PRESET_FILE);
+    let presets: Rc<RefCell<Presets>> = Rc::new(RefCell::new(Presets::load(&presets_path)));
+    let persist_presets: Rc<dyn Fn()> = {
+        let presets = presets.clone();
+        let presets_path = presets_path.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            if let Err(error) = presets.borrow().save(&presets_path) {
+                toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                    "Presets nicht schreibbar: {error}"
+                )));
+            }
+        })
+    };
+    let rebuild_presets_menu: Rc<dyn Fn()> = {
+        let presets = presets.clone();
+        let button = panel.presets_button().clone();
+        Rc::new(move || {
+            let menu = presets_menu::menu(&presets.borrow());
+            button.set_menu_model(Some(&menu));
+        })
+    };
+    rebuild_presets_menu();
+
+    // Aktuelle Kette unter einem Namen ablegen; vorhandene Namen nach Rückfrage ersetzen.
+    let save_current_preset: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let panel = panel.clone();
+        let presets = presets.clone();
+        let persist_presets = persist_presets.clone();
+        let rebuild_presets_menu = rebuild_presets_menu.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            let rules = panel.snapshot();
+            if rules.is_empty() {
+                toast_overlay.add_toast(libadwaita::Toast::new("Keine aktive Regel zum Speichern"));
+                return;
+            }
+            let entry = gtk::Entry::builder()
+                .placeholder_text("Name")
+                .activates_default(true)
+                .build();
+            let dialog = libadwaita::AlertDialog::builder()
+                .heading("Preset speichern")
+                .body("Name für die aktuelle Regelkette:")
+                .extra_child(&entry)
+                .build();
+            dialog.add_response("cancel", "Abbrechen");
+            dialog.add_response("save", "Speichern");
+            dialog.set_response_appearance("save", libadwaita::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("save"));
+            dialog.set_close_response("cancel");
+
+            let write: Rc<dyn Fn(String)> = {
+                let presets = presets.clone();
+                let persist_presets = persist_presets.clone();
+                let rebuild_presets_menu = rebuild_presets_menu.clone();
+                let toast_overlay = toast_overlay.clone();
+                let rules = rules.clone();
+                Rc::new(move |name: String| {
+                    let result = presets.borrow_mut().upsert(Preset {
+                        name: name.clone(),
+                        rules: rules.clone(),
+                    });
+                    match result {
+                        Ok(replaced) => {
+                            persist_presets();
+                            rebuild_presets_menu();
+                            let text = if replaced {
+                                format!("Preset „{name}“ ersetzt")
+                            } else {
+                                format!("Preset „{name}“ gespeichert")
+                            };
+                            toast_overlay.add_toast(libadwaita::Toast::new(&text));
+                        }
+                        Err(error) => {
+                            toast_overlay.add_toast(libadwaita::Toast::new(&error));
+                        }
+                    }
+                })
+            };
+
+            let window_for_response = window.clone();
+            let presets_for_response = presets.clone();
+            let toast_for_response = toast_overlay.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                if response != "save" {
+                    return;
+                }
+                dialog.close();
+                let Ok(name) = validate_name(&entry.text()) else {
+                    toast_for_response
+                        .add_toast(libadwaita::Toast::new("Preset braucht einen Namen"));
+                    return;
+                };
+                if presets_for_response.borrow().get(&name).is_none() {
+                    write(name);
+                    return;
+                }
+                let confirm = libadwaita::AlertDialog::builder()
+                    .heading(format!("Preset „{name}“ überschreiben?"))
+                    .body("Ein Preset mit diesem Namen existiert bereits.")
+                    .build();
+                confirm.add_response("cancel", "Abbrechen");
+                confirm.add_response("overwrite", "Überschreiben");
+                confirm.set_response_appearance(
+                    "overwrite",
+                    libadwaita::ResponseAppearance::Destructive,
+                );
+                confirm.set_close_response("cancel");
+                let write = write.clone();
+                let name_for_confirm = name.clone();
+                confirm.connect_response(None, move |dialog, response| {
+                    dialog.close();
+                    if response == "overwrite" {
+                        write(name_for_confirm.clone());
+                    }
+                });
+                confirm.present(Some(&window_for_response));
+            });
+            dialog.present(Some(&window));
+        })
+    };
+
+    let load_preset: Rc<dyn Fn(&str)> = {
+        let panel = panel.clone();
+        let presets = presets.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(
+            move |name: &str| match presets.borrow().get(name).cloned() {
+                Some(preset) => {
+                    panel.apply_preset(&preset);
+                    toast_overlay
+                        .add_toast(libadwaita::Toast::new(&format!("Preset „{name}“ geladen")));
+                }
+                None => {
+                    toast_overlay.add_toast(libadwaita::Toast::new("Preset nicht gefunden"));
+                }
+            },
+        )
+    };
+
+    let rename_preset: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let presets = presets.clone();
+        let persist_presets = persist_presets.clone();
+        let rebuild_presets_menu = rebuild_presets_menu.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            let names = presets.borrow().names();
+            if names.is_empty() {
+                toast_overlay.add_toast(libadwaita::Toast::new("Keine Presets vorhanden"));
+                return;
+            }
+            let selection = preset_dropdown(&names);
+            let entry = gtk::Entry::builder()
+                .placeholder_text("Neuer Name")
+                .activates_default(true)
+                .build();
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            content.append(&selection);
+            content.append(&entry);
+            let dialog = libadwaita::AlertDialog::builder()
+                .heading("Preset umbenennen")
+                .extra_child(&content)
+                .build();
+            dialog.add_response("cancel", "Abbrechen");
+            dialog.add_response("rename", "Umbenennen");
+            dialog.set_response_appearance("rename", libadwaita::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("rename"));
+            dialog.set_close_response("cancel");
+
+            let presets_for_response = presets.clone();
+            let persist_for_response = persist_presets.clone();
+            let rebuild_for_response = rebuild_presets_menu.clone();
+            let toast_for_response = toast_overlay.clone();
+            let names_for_response = names.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                if response != "rename" {
+                    return;
+                }
+                dialog.close();
+                let Some(old) = names_for_response
+                    .get(selection.selected() as usize)
+                    .cloned()
+                else {
+                    return;
+                };
+                let result = presets_for_response
+                    .borrow_mut()
+                    .rename(&old, &entry.text());
+                match result {
+                    Ok(true) => {
+                        persist_for_response();
+                        rebuild_for_response();
+                        toast_for_response.add_toast(libadwaita::Toast::new(&format!(
+                            "Preset „{old}“ umbenannt"
+                        )));
+                    }
+                    Ok(false) => {
+                        toast_for_response
+                            .add_toast(libadwaita::Toast::new("Preset nicht gefunden"));
+                    }
+                    Err(error) => {
+                        toast_for_response.add_toast(libadwaita::Toast::new(&error));
+                    }
+                }
+            });
+            dialog.present(Some(&window));
+        })
+    };
+
+    let delete_preset: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let presets = presets.clone();
+        let persist_presets = persist_presets.clone();
+        let rebuild_presets_menu = rebuild_presets_menu.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            let names = presets.borrow().names();
+            if names.is_empty() {
+                toast_overlay.add_toast(libadwaita::Toast::new("Keine Presets vorhanden"));
+                return;
+            }
+            let selection = preset_dropdown(&names);
+            let dialog = libadwaita::AlertDialog::builder()
+                .heading("Preset löschen")
+                .body("Gespeicherte Regelkette dauerhaft entfernen.")
+                .extra_child(&selection)
+                .build();
+            dialog.add_response("cancel", "Abbrechen");
+            dialog.add_response("delete", "Löschen");
+            dialog.set_response_appearance("delete", libadwaita::ResponseAppearance::Destructive);
+            dialog.set_close_response("cancel");
+
+            let presets_for_response = presets.clone();
+            let persist_for_response = persist_presets.clone();
+            let rebuild_for_response = rebuild_presets_menu.clone();
+            let toast_for_response = toast_overlay.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                if response != "delete" {
+                    return;
+                }
+                dialog.close();
+                let Some(name) = names.get(selection.selected() as usize).cloned() else {
+                    return;
+                };
+                let removed = presets_for_response.borrow_mut().remove(&name);
+                if removed {
+                    persist_for_response();
+                    rebuild_for_response();
+                    toast_for_response
+                        .add_toast(libadwaita::Toast::new(&format!("Preset „{name}“ gelöscht")));
+                }
+            });
+            dialog.present(Some(&window));
+        })
+    };
+
+    let import_presets: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let presets = presets.clone();
+        let persist_presets = persist_presets.clone();
+        let rebuild_presets_menu = rebuild_presets_menu.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            let dialog = gtk::FileDialog::builder()
+                .title("Presets importieren")
+                .modal(true)
+                .build();
+            let presets = presets.clone();
+            let persist_presets = persist_presets.clone();
+            let rebuild_presets_menu = rebuild_presets_menu.clone();
+            let toast_overlay = toast_overlay.clone();
+            dialog.open(Some(&window), gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else {
+                    return;
+                };
+                let Some(path) = file.path() else {
+                    return;
+                };
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                            "Datei nicht lesbar: {error}"
+                        )));
+                        return;
+                    }
+                };
+                match Presets::from_json(&text) {
+                    Ok(imported) => {
+                        let stats = presets.borrow_mut().merge(imported);
+                        persist_presets();
+                        rebuild_presets_menu();
+                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                            "{} Preset(s) importiert, {} ersetzt",
+                            stats.imported, stats.overwritten
+                        )));
+                    }
+                    Err(error) => {
+                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                            "Import fehlgeschlagen: {error}"
+                        )));
+                    }
+                }
+            });
+        })
+    };
+
+    let export_presets: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let presets = presets.clone();
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move || {
+            if presets.borrow().is_empty() {
+                toast_overlay.add_toast(libadwaita::Toast::new("Keine Presets zum Exportieren"));
+                return;
+            }
+            let text = match presets.borrow().to_json() {
+                Ok(text) => text,
+                Err(error) => {
+                    toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                        "Export fehlgeschlagen: {error}"
+                    )));
+                    return;
+                }
+            };
+            let dialog = gtk::FileDialog::builder()
+                .title("Presets exportieren")
+                .initial_name(PRESET_FILE)
+                .modal(true)
+                .build();
+            let toast_overlay = toast_overlay.clone();
+            dialog.save(Some(&window), gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else {
+                    return;
+                };
+                let Some(path) = file.path() else {
+                    return;
+                };
+                match std::fs::write(&path, &text) {
+                    Ok(()) => toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                        "Presets nach {} exportiert",
+                        path.display()
+                    ))),
+                    Err(error) => {
+                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                            "Export fehlgeschlagen: {error}"
+                        )));
+                    }
+                }
+            });
+        })
+    };
+
+    let save_preset_for_button = save_current_preset.clone();
+    panel
+        .save_preset_button()
+        .connect_clicked(move |_| save_preset_for_button());
     // Umbenennen
     let rename: Rc<dyn Fn()> = {
         let window = window.clone();
@@ -582,12 +947,30 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         ("clear", clear_all.clone()),
         ("rename", rename.clone()),
         ("undo", undo_last.clone()),
+        ("save-preset", save_current_preset.clone()),
+        ("rename-preset", rename_preset.clone()),
+        ("delete-preset", delete_preset.clone()),
+        ("import-presets", import_presets.clone()),
+        ("export-presets", export_presets.clone()),
     ] {
         let action = gio::SimpleAction::new(name, None);
         let callback = callback.clone();
         action.connect_activate(move |_, _| callback());
         actions.add_action(&action);
     }
+    let load_preset_action = gio::SimpleAction::new(
+        presets_menu::LOAD_ACTION_NAME,
+        Some(gtk::glib::VariantTy::STRING),
+    );
+    {
+        let load_preset = load_preset.clone();
+        load_preset_action.connect_activate(move |_, parameter| {
+            if let Some(name) = parameter.and_then(|value| value.str()) {
+                load_preset(name);
+            }
+        });
+    }
+    actions.add_action(&load_preset_action);
     window.insert_action_group("win", Some(&actions));
 
     // Dateien von der Kommandozeile bzw. aus dem Dateimanager übernehmen.
@@ -658,6 +1041,12 @@ fn apply_report(state: &SharedState, report: &ExecutionReport) {
             }
         }
     }
+}
+
+/// Auswahlliste für Preset-Namen; Reihenfolge entspricht `names`.
+fn preset_dropdown(names: &[String]) -> gtk::DropDown {
+    let labels = names.iter().map(String::as_str).collect::<Vec<_>>();
+    gtk::DropDown::from_strings(&labels)
 }
 
 fn summary_text(state: &AppState) -> String {

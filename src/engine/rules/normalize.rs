@@ -1,7 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 use crate::engine::{Rule, RuleContext, RuleError, RuleOutcome};
 
 /// Gewünschte Groß-/Kleinschreibung.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CaseMode {
     #[default]
     Keep,
