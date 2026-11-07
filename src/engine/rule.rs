@@ -9,6 +9,12 @@ pub struct RuleContext<'a> {
     pub original_stem: &'a str,
     /// Position in der Dateiliste (0-basiert).
     pub index: usize,
+    /// Position der Gruppe in der Liste (0-basiert).
+    pub group_index: usize,
+    /// Anzahl der Dateien in dieser Gruppe (mindestens 1).
+    pub group_size: usize,
+    /// Position der Datei innerhalb ihrer Gruppe (0-basiert).
+    pub member_index: usize,
 }
 
 /// Transformiert den Dateistamm. Regeln sehen nur den Stamm und nie die

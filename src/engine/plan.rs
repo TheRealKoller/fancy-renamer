@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::engine::{FileItem, RuleChain, RuleContext};
+use crate::engine::{FileGroup, FileItem, RuleChain, RuleContext};
 
 /// Bewertung einer Zeile der Vorschau.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,20 +87,27 @@ impl RenamePlan {
 }
 
 /// Berechnet die Vorschau, ohne das Dateisystem zu verändern.
-pub fn build_plan(items: &[FileItem], chain: &RuleChain) -> RenamePlan {
-    let mut rows: Vec<PlanRow> = items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            let ctx = RuleContext {
-                path: &item.path,
-                original_stem: &item.stem,
-                index,
-            };
-            match chain.apply(&item.stem, &ctx) {
+///
+/// Regeln wirken auf die Gruppe: alle Dateien eines Paares erhalten denselben
+/// neuen Stamm und behalten ihre jeweilige Erweiterung.
+pub fn build_plan(groups: &[FileGroup], chain: &RuleChain) -> RenamePlan {
+    let mut rows: Vec<PlanRow> = Vec::new();
+    for (group_index, group) in groups.iter().enumerate() {
+        let first = &group.members[0];
+        let ctx = RuleContext {
+            path: &first.path,
+            original_stem: &group.original_stem,
+            index: group_index,
+            group_index,
+            group_size: group.members.len(),
+            member_index: 0,
+        };
+        let result = chain.apply(&group.original_stem, &ctx);
+        for item in &group.members {
+            rows.push(match &result {
                 Ok(new_stem) => PlanRow {
-                    new_path: item.target_path(&new_stem),
-                    new_stem,
+                    new_path: item.target_path(new_stem),
+                    new_stem: new_stem.clone(),
                     item: item.clone(),
                     status: PlanStatus::Unchanged,
                     rule_error: None,
@@ -112,9 +119,9 @@ pub fn build_plan(items: &[FileItem], chain: &RuleChain) -> RenamePlan {
                     status: PlanStatus::RuleError,
                     rule_error: Some(error.to_string()),
                 },
-            }
-        })
-        .collect();
+            });
+        }
+    }
 
     for row in &mut rows {
         if row.status == PlanStatus::RuleError {
@@ -137,8 +144,6 @@ pub fn build_plan(items: &[FileItem], chain: &RuleChain) -> RenamePlan {
     RenamePlan { rows }
 }
 
-/// Gültigkeit von Stamm + Erweiterung: Linux erlaubt in Dateinamen alles außer
-/// `/` und NUL, begrenzt die Komponente aber auf 255 Byte.
 fn is_valid_name(stem: &str, extension: &str) -> bool {
     if stem.is_empty() || stem == "." || stem == ".." {
         return false;
@@ -170,13 +175,13 @@ fn detect_duplicates(rows: &mut [PlanRow]) {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let duplicates: Vec<PathBuf> = rows
         .iter()
-        .filter(|row| !row.status.is_blocking())
+        .filter(|row| row.status.is_rename())
         .filter(|row| !seen.insert(row.new_path.clone()))
         .map(|row| row.new_path.clone())
         .collect();
 
     for row in rows {
-        if duplicates.contains(&row.new_path) && !row.status.is_blocking() {
+        if duplicates.contains(&row.new_path) && row.status.is_rename() {
             row.status = PlanStatus::Duplicate;
         }
     }
