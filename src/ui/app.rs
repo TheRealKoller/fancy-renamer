@@ -34,13 +34,24 @@ fn add_callback() -> Option<AddPaths> {
     ADD_CALLBACK.with(|slot| slot.borrow().clone())
 }
 
-/// Pfade, die beim Start bereits übergeben wurden.
-fn pending_paths() -> Vec<PathBuf> {
-    std::env::args_os()
-        .skip(1)
-        .filter(|argument| !argument.to_string_lossy().starts_with('-'))
-        .map(PathBuf::from)
-        .collect()
+/// Pfade, die beim Start bereits übergeben wurden, und ob Unterordner
+/// einbezogen werden (`--recursive`/`-r`).
+pub fn parse_args(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> (Vec<PathBuf>, bool) {
+    let mut paths = Vec::new();
+    let mut recursive = false;
+    for argument in arguments {
+        let text = argument.to_string_lossy();
+        if text == "--recursive" || text == "-r" {
+            recursive = true;
+        } else if !text.starts_with('-') {
+            paths.push(PathBuf::from(argument));
+        }
+    }
+    (paths, recursive)
+}
+
+fn pending_paths() -> (Vec<PathBuf>, bool) {
+    parse_args(std::env::args_os().skip(1))
 }
 
 /// Callback mit Ergebnis der Ausführung.
@@ -76,12 +87,12 @@ pub fn run() -> Result<()> {
         }
     });
     app.connect_activate(|app| {
-        let pending = pending_paths();
-        build_window(app, pending);
+        let (pending, recursive) = pending_paths();
+        build_window(app, pending, recursive);
     });
     app.connect_open(|app, files, _hint| {
         if app.active_window().is_none() {
-            build_window(app, Vec::new());
+            build_window(app, Vec::new(), false);
         }
         let paths = files
             .iter()
@@ -92,11 +103,16 @@ pub fn run() -> Result<()> {
         }
     });
 
-    app.run();
+    // Eigene Argumente (Pfade, `--recursive`) selbst auswerten; GApplication
+    // würde unbekannte Optionen ablehnen.
+    let program = std::env::args()
+        .next()
+        .unwrap_or_else(|| "fancy-renamer".to_string());
+    app.run_with_args(&[program.as_str()]);
     Ok(())
 }
 
-fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
+fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>, initial_recursive: bool) {
     let state: SharedState = Rc::new(RefCell::new(AppState::default()));
 
     let header = libadwaita::HeaderBar::new();
@@ -108,12 +124,22 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         .icon_name("folder-open-symbolic")
         .tooltip_text("Ordner hinzufügen")
         .build();
+    let recursive_toggle = gtk::ToggleButton::builder()
+        .label("Unterordner")
+        .active(initial_recursive)
+        .tooltip_text(
+            "Ordner samt Unterordnern einbeziehen – gilt für Ordnerauswahl, \
+             Drag & Drop und Kommandozeile",
+        )
+        .build();
+    state.borrow_mut().recursive = initial_recursive;
     let clear_button = gtk::Button::builder()
         .icon_name("edit-clear-all-symbolic")
         .tooltip_text("Alle entfernen (Ctrl+Entf)")
         .build();
     header.pack_start(&add_button);
     header.pack_start(&folder_button);
+    header.pack_start(&recursive_toggle);
     header.pack_end(&clear_button);
 
     // Regelbereich
@@ -124,6 +150,13 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             callback();
         }
     }));
+
+    {
+        let state = state.clone();
+        recursive_toggle.connect_toggled(move |button| {
+            state.borrow_mut().recursive = button.is_active();
+        });
+    }
 
     // Dateiliste
     let list = gtk::ListBox::builder()
@@ -359,37 +392,39 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             })
         };
 
-    let add_folder: Rc<dyn Fn()> = {
-        let window = window.clone();
-        let state = state.clone();
-        let refresh = refresh.clone();
-        let report_skipped = report_skipped.clone();
-        Rc::new(move || {
-            let dialog = gtk::FileDialog::builder()
-                .title("Ordner auswählen")
-                .modal(true)
-                .build();
+    let add_folder: Rc<dyn Fn()> =
+        {
+            let window = window.clone();
             let state = state.clone();
             let refresh = refresh.clone();
             let report_skipped = report_skipped.clone();
-            dialog.select_folder(
-                Some(&window),
-                gio::Cancellable::NONE,
-                move |result| match result {
-                    Ok(folder) => {
-                        if let Some(path) = folder.path() {
-                            let skipped = state::add_paths(&state, state::files_in_folder(&path));
-                            report_skipped.as_ref()(skipped);
-                            refresh();
+            Rc::new(move || {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Ordner auswählen")
+                    .modal(true)
+                    .build();
+                let state = state.clone();
+                let refresh = refresh.clone();
+                let report_skipped = report_skipped.clone();
+                dialog.select_folder(Some(&window), gio::Cancellable::NONE, move |result| {
+                    match result {
+                        Ok(folder) => {
+                            if let Some(path) = folder.path() {
+                                let recursive = state.borrow().recursive;
+                                let scan = state::scan_folder(&path, recursive);
+                                let mut skipped = scan.skipped;
+                                skipped.extend(state::add_paths(&state, scan.files));
+                                report_skipped.as_ref()(skipped);
+                                refresh();
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("Ordnerauswahl abgebrochen: {error}");
                         }
                     }
-                    Err(error) => {
-                        eprintln!("Ordnerauswahl abgebrochen: {error}");
-                    }
-                },
-            );
-        })
-    };
+                });
+            })
+        };
 
     // Journal der letzten Läufe und Rückgängig-Funktion.
     let journal_path = gtk::glib::user_state_dir()
@@ -979,7 +1014,10 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         let refresh = refresh.clone();
         let report_skipped = report_skipped.clone();
         Rc::new(move |paths: Vec<PathBuf>| {
-            let skipped = state::add_paths(&state, paths);
+            let recursive = state.borrow().recursive;
+            let scan = state::expand_paths(paths, recursive);
+            let mut skipped = scan.skipped;
+            skipped.extend(state::add_paths(&state, scan.files));
             report_skipped.as_ref()(skipped);
             refresh();
         })
@@ -1013,7 +1051,12 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             let Ok(files) = value.get::<gtk::gdk::FileList>() else {
                 return false;
             };
-            add_from_outside(state::paths_from_drop(&files));
+            let paths = files
+                .files()
+                .into_iter()
+                .filter_map(|file| file.path())
+                .collect::<Vec<_>>();
+            add_from_outside(paths);
             true
         }
     });
