@@ -12,8 +12,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{
-    CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
-    NumberingRule, ReplaceRule, Rule,
+    CaseMode, ExifDateRule, ExifMode, Id3Mode, Id3TagRule, MatchMode, NormalizeOptions,
+    NormalizeRule, NumberingMode, NumberingRule, ReplaceRule, Rule,
 };
 
 /// Dateiname innerhalb des Konfigurationsverzeichnisses.
@@ -64,6 +64,10 @@ pub enum RulePreset {
         format: String,
         mode: ExifMode,
     },
+    Id3Tags {
+        format: String,
+        mode: Id3Mode,
+    },
 }
 
 impl RulePreset {
@@ -74,6 +78,7 @@ impl RulePreset {
             Self::Numbering { .. } => "numbering",
             Self::Normalize { .. } => "normalize",
             Self::ExifDate { .. } => "exif_date",
+            Self::Id3Tags { .. } => "id3_tags",
         }
     }
 
@@ -126,6 +131,9 @@ impl RulePreset {
                 strip_special: *strip_special,
             }))),
             Self::ExifDate { format, mode } => ExifDateRule::new(format.clone(), *mode)
+                .map(|rule| Box::new(rule) as Box<dyn Rule>)
+                .map_err(|error| error.to_string()),
+            Self::Id3Tags { format, mode } => Id3TagRule::new(format.clone(), *mode)
                 .map(|rule| Box::new(rule) as Box<dyn Rule>)
                 .map_err(|error| error.to_string()),
         }

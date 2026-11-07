@@ -5,8 +5,8 @@ use gtk::prelude::*;
 use libadwaita::prelude::*;
 
 use crate::engine::{
-    CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
-    NumberingRule, Preset, ReplaceRule, Rule, RuleChain, RulePreset,
+    CaseMode, ExifDateRule, ExifMode, Id3Mode, Id3TagRule, MatchMode, NormalizeOptions,
+    NormalizeRule, NumberingMode, NumberingRule, Preset, ReplaceRule, Rule, RuleChain, RulePreset,
 };
 
 type ChangeHandler = Rc<dyn Fn()>;
@@ -96,6 +96,7 @@ impl RulePanel {
             Box::new(NumberingCard::new(card_change.clone())),
             Box::new(NormalizeCard::new(card_change.clone())),
             Box::new(ExifCard::new(card_change.clone())),
+            Box::new(Id3Card::new(card_change.clone())),
         ];
 
         let entries = cards
@@ -896,6 +897,92 @@ impl ExifCard {
     }
 }
 
+struct Id3Card {
+    expander: libadwaita::ExpanderRow,
+    switch: gtk::Switch,
+    mode: gtk::DropDown,
+    format: gtk::Entry,
+}
+
+impl Id3Card {
+    fn new(on_change: ChangeHandler) -> Self {
+        let switch = gtk::Switch::builder().valign(gtk::Align::Center).build();
+        let expander = expander(
+            "Musik (ID3)",
+            "Dateiname aus den ID3-Tags von Musikdateien",
+            &switch,
+        );
+
+        let (mode_row, mode) = dropdown_row("Modus", &["Stamm ersetzen", "voranstellen"]);
+        let (format_row, format) = entry_row("Format", "{artist} - {title}");
+
+        expander.add_row(&mode_row);
+        expander.add_row(&format_row);
+
+        on_text_changed(&format, &on_change);
+        on_dropdown_changed(&mode, &on_change);
+        on_switch_changed(&switch, &on_change);
+
+        Self {
+            expander,
+            switch,
+            mode,
+            format,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.switch.is_active()
+    }
+
+    fn rule_id(&self) -> &'static str {
+        "id3_tags"
+    }
+
+    fn id3_mode(&self) -> Id3Mode {
+        if self.mode.selected() == 1 {
+            Id3Mode::Prefix
+        } else {
+            Id3Mode::Replace
+        }
+    }
+
+    fn effective_format(&self) -> String {
+        let format = self.format.text().to_string();
+        if format.is_empty() {
+            "{artist} - {title}".to_string()
+        } else {
+            format
+        }
+    }
+
+    fn snapshot(&self) -> RulePreset {
+        RulePreset::Id3Tags {
+            format: self.effective_format(),
+            mode: self.id3_mode(),
+        }
+    }
+
+    fn apply_preset(&self, preset: &RulePreset) {
+        let RulePreset::Id3Tags { format, mode } = preset else {
+            return;
+        };
+        self.mode.set_selected(match mode {
+            Id3Mode::Replace => 0,
+            Id3Mode::Prefix => 1,
+        });
+        self.format.set_text(format);
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.switch.set_active(enabled);
+    }
+
+    fn build_rule(&self) -> Result<Id3TagRule, String> {
+        Id3TagRule::new(self.effective_format(), self.id3_mode()).map_err(|error| error.to_string())
+    }
+}
+
 fn on_text_changed(entry: &gtk::Entry, handler: &ChangeHandler) {
     let handler = handler.clone();
     entry.connect_changed(move |_| handler());
@@ -949,3 +1036,4 @@ impl_rule_card!(ReplaceCard, ReplaceRule);
 impl_rule_card!(NumberingCard, NumberingRule);
 impl_rule_card!(NormalizeCard, NormalizeRule);
 impl_rule_card!(ExifCard, ExifDateRule);
+impl_rule_card!(Id3Card, Id3TagRule);

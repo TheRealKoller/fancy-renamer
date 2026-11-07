@@ -262,7 +262,8 @@ fn rules_move_step_by_step_in_both_directions() {
                 "Suchen & Ersetzen",
                 "Nummerierung",
                 "Namen normalisieren",
-                "Aufnahmedatum (EXIF)"
+                "Aufnahmedatum (EXIF)",
+                "Musik (ID3)"
             ]
         );
 
@@ -302,12 +303,13 @@ fn rules_move_step_by_step_in_both_directions() {
         up.emit_clicked();
         assert_eq!(rule_titles(&panel)[0], top_title);
 
-        let bottom_title = rule_titles(&panel)[3].clone();
+        let last = rule_titles(&panel).len() - 1;
+        let bottom_title = rule_titles(&panel)[last].clone();
         let bottom = find_expander(panel.widget(), &bottom_title).unwrap();
         let down = find_button(&bottom, "Regel nach unten").unwrap();
         assert!(!down.is_sensitive());
         down.emit_clicked();
-        assert_eq!(rule_titles(&panel)[3], bottom_title);
+        assert_eq!(rule_titles(&panel)[last], bottom_title);
     });
 }
 
@@ -609,6 +611,35 @@ fn loading_a_preset_replaces_chain_order_and_parameters() {
         panel.apply_preset(&single);
         assert_eq!(panel.snapshot(), single.rules);
         assert_eq!(panel.build_chain().unwrap().ids(), vec!["replace"]);
+    });
+}
+
+#[test]
+fn id3_settings_roundtrip_through_panel() {
+    use fancy_renamer::engine::{Id3Mode, Preset, RulePreset};
+
+    ui(|| {
+        let panel = RulePanel::new(|| {});
+        let preset = Preset {
+            name: "Musik".into(),
+            rules: vec![RulePreset::Id3Tags {
+                format: "{track} - {artist} - {title}".into(),
+                mode: Id3Mode::Prefix,
+            }],
+        };
+        panel.apply_preset(&preset);
+        assert_eq!(panel.snapshot(), preset.rules);
+        assert_eq!(panel.build_chain().unwrap().ids(), vec!["id3_tags"]);
+
+        // Unbekannter Platzhalter wird beim Kettenaufbau abgelehnt.
+        panel.apply_preset(&Preset {
+            name: "Kaputt".into(),
+            rules: vec![RulePreset::Id3Tags {
+                format: "{genre}".into(),
+                mode: Id3Mode::Replace,
+            }],
+        });
+        assert!(panel.build_chain().is_err());
     });
 }
 
