@@ -14,7 +14,9 @@ use fancy_renamer::engine::{
 };
 use fancy_renamer::ui::file_list::{self, RemoveHandler};
 use fancy_renamer::ui::rule_panel::RulePanel;
-use fancy_renamer::ui::state::{AppState, SharedState, add_paths, build_plan_async};
+use fancy_renamer::ui::state::{
+    AppState, SharedState, add_paths, build_plan_async, files_in_folder, paths_from_drop,
+};
 use tempfile::TempDir;
 
 type Job = (Box<dyn FnOnce() + Send>, Sender<std::thread::Result<()>>);
@@ -122,6 +124,85 @@ fn add_paths_skips_duplicates() {
         let path = temp_file(&dir, "a.jpg");
         let state: SharedState = std::rc::Rc::new(std::cell::RefCell::new(AppState::default()));
         add_paths(&state, vec![path.clone(), path.clone()]);
+        assert_eq!(state.borrow().items.len(), 1);
+    });
+}
+
+#[test]
+fn added_files_are_sorted_naturally() {
+    ui(|| {
+        let dir = TempDir::new().unwrap();
+        let paths = vec![
+            temp_file(&dir, "foto10.jpg"),
+            temp_file(&dir, "foto2.jpg"),
+            temp_file(&dir, "Foto1.jpg"),
+        ];
+        let state: SharedState = std::rc::Rc::new(std::cell::RefCell::new(AppState::default()));
+        assert!(add_paths(&state, paths).is_empty());
+        let names = state
+            .borrow()
+            .items
+            .iter()
+            .map(|item| item.file_name_for(&item.stem))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["Foto1.jpg", "foto2.jpg", "foto10.jpg"]);
+    });
+}
+
+#[test]
+fn folder_import_takes_top_level_files_only() {
+    ui(|| {
+        let dir = TempDir::new().unwrap();
+        temp_file(&dir, "b.jpg");
+        temp_file(&dir, "a.jpg");
+        temp_file(&dir, ".versteckt.jpg");
+        fs::create_dir(dir.path().join("unterordner")).unwrap();
+
+        let paths = files_in_folder(dir.path());
+        let names = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a.jpg", "b.jpg"]);
+
+        let state: SharedState = std::rc::Rc::new(std::cell::RefCell::new(AppState::default()));
+        assert!(add_paths(&state, paths).is_empty());
+        assert_eq!(state.borrow().items.len(), 2);
+    });
+}
+
+#[test]
+fn dropped_folders_contribute_their_files() {
+    ui(|| {
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path().join("ordner");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("b.jpg"), b"x").unwrap();
+        fs::write(folder.join("a.jpg"), b"x").unwrap();
+        let single = temp_file(&dir, "einzeln.jpg");
+
+        let files = gtk::gdk::FileList::from_array(&[
+            gtk::gio::File::for_path(&folder),
+            gtk::gio::File::for_path(&single),
+        ]);
+        let paths = paths_from_drop(&files);
+        let names = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a.jpg", "b.jpg", "einzeln.jpg"]);
+    });
+}
+
+#[test]
+fn missing_paths_are_reported_and_not_added() {
+    ui(|| {
+        let dir = TempDir::new().unwrap();
+        let existing = temp_file(&dir, "da.jpg");
+        let missing = dir.path().join("weg.jpg");
+        let state: SharedState = std::rc::Rc::new(std::cell::RefCell::new(AppState::default()));
+        let rejected = add_paths(&state, vec![existing, missing.clone()]);
+        assert_eq!(rejected, vec![missing]);
         assert_eq!(state.borrow().items.len(), 1);
     });
 }

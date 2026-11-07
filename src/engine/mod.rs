@@ -9,6 +9,7 @@ mod item;
 mod plan;
 mod rule;
 mod rules;
+mod sort;
 
 pub use error::{ExecuteError, RuleError};
 pub use execute::{ExecutionReport, execute};
@@ -20,3 +21,4 @@ pub use rules::{
     CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
     NumberingRule, ReplaceRule,
 };
+pub use sort::{natural_cmp, sort_items};

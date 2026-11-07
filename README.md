@@ -29,12 +29,16 @@ cargo clippy --all-targets -- -D warnings
 
 ## Bedienung
 
-Dateien über **Dateien hinzufügen** (`Ctrl+O`) oder **Ordner hinzufügen** in die Liste holen –
-oder die App direkt mit Pfaden starten:
+Dateien über **Dateien hinzufügen** (`Ctrl+O`), **Ordner hinzufügen** (oberste Ebene, ohne
+versteckte Dateien) oder per Drag & Drop ins Fenster holen – oder die App direkt mit Pfaden
+starten:
 
 ```sh
 fancy-renamer ~/Bilder/*.jpg
 ```
+
+Die Liste bleibt natürlich sortiert (`foto2` vor `foto10`), doppelte Pfade werden nicht erneut
+aufgenommen, nicht lesbare Pfade meldet ein Hinweis.
 
 Im Regelbereich lassen sich die vier Karten kombinieren, per Hoch/Runter umsortieren und einzeln
 abschalten; die Reihenfolge der Karten ist die Reihenfolge der Regeln. Jede Änderung berechnet die
