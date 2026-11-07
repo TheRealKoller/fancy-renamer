@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#3584e4"/>
+  <!-- hinteres Blatt -->
+  <path d="M30 30h32l16 16v46a6 6 0 0 1-6 6H30a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z" fill="#ffffff" opacity="0.55"/>
+  <path d="M62 30l16 16H62z" fill="#1c71d8" opacity="0.55"/>
+  <!-- vorderes Blatt -->
+  <path d="M50 42h30l14 14v38a6 6 0 0 1-6 6H50a6 6 0 0 1-6-6V48a6 6 0 0 1 6-6z" fill="#ffffff"/>
+  <path d="M80 42l14 14H80z" fill="#c0bfbc"/>
+  <!-- Pfeil: Umbenennen -->
+  <path d="M56 68h22l-7-7 5-5 16 16-16 16-5-5 7-7H56z" fill="#3584e4"/>
+</svg>

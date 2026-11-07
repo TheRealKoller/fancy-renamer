@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=fancy-renamer
+GenericName=Datei-Umbenennung
+Comment=Dateien und Datei-Paare regelbasiert umbenennen
+Exec=fancy-renamer %F
+Icon=io.github.therealKoller.FancyRenamer
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=rename;umbenennen;dateien;files;
+StartupNotify=true
+StartupWMClass=io.github.therealKoller.FancyRenamer
