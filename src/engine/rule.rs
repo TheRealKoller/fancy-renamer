@@ -57,6 +57,11 @@ impl RuleChain {
         self.rules.is_empty()
     }
 
+    /// Kennungen der Regeln in Anwendungsreihenfolge.
+    pub fn ids(&self) -> Vec<&'static str> {
+        self.rules.iter().map(|rule| rule.id()).collect()
+    }
+
     pub fn apply(&self, stem: &str, ctx: &RuleContext<'_>) -> Result<RuleOutcome, RuleError> {
         let mut current = stem.to_string();
         for rule in &self.rules {

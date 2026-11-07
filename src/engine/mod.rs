@@ -8,6 +8,7 @@ mod group;
 mod item;
 mod journal;
 mod plan;
+mod presets;
 mod rule;
 mod rules;
 mod sort;
@@ -18,6 +19,7 @@ pub use group::FileGroup;
 pub use item::FileItem;
 pub use journal::{Journal, JournalEntry, JournalRename, MAX_ENTRIES, UndoReport, UndoSkip, undo};
 pub use plan::{PlanRow, PlanStatus, RenamePlan, build_plan};
+pub use presets::{MergeStats, PRESET_FILE, Preset, Presets, RulePreset, validate_name};
 pub use rule::{Rule, RuleChain, RuleContext, RuleOutcome};
 pub use rules::{
     CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
