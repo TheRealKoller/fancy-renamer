@@ -33,3 +33,5 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
+      - name: Nautilus-Erweiterung
+        run: python3 nautilus/test_extension.py
