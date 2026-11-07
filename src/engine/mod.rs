@@ -22,7 +22,7 @@ pub use plan::{PlanRow, PlanStatus, RenamePlan, build_plan};
 pub use presets::{MergeStats, PRESET_FILE, Preset, Presets, RulePreset, validate_name};
 pub use rule::{Rule, RuleChain, RuleContext, RuleOutcome};
 pub use rules::{
-    CaseMode, ExifDateRule, ExifMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode,
-    NumberingRule, ReplaceRule,
+    CaseMode, ExifDateRule, ExifMode, Id3Mode, Id3TagRule, MatchMode, NormalizeOptions,
+    NormalizeRule, NumberingMode, NumberingRule, ReplaceRule,
 };
 pub use sort::{natural_cmp, sort_items};

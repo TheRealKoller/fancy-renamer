@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use fancy_renamer::engine::{
-    CaseMode, ExifMode, MatchMode, MergeStats, NumberingMode, Preset, Presets, RuleContext,
-    RuleOutcome, RulePreset, validate_name,
+    CaseMode, ExifMode, Id3Mode, MatchMode, MergeStats, NumberingMode, Preset, Presets,
+    RuleContext, RuleOutcome, RulePreset, validate_name,
 };
 use tempfile::TempDir;
 
@@ -46,6 +46,10 @@ fn all_rules() -> Vec<RulePreset> {
         RulePreset::ExifDate {
             format: "%Y-%m".into(),
             mode: ExifMode::Prefix,
+        },
+        RulePreset::Id3Tags {
+            format: "{track} - {artist} - {title}".into(),
+            mode: Id3Mode::Replace,
         },
     ]
 }

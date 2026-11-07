@@ -613,6 +613,35 @@ fn loading_a_preset_replaces_chain_order_and_parameters() {
 }
 
 #[test]
+fn id3_settings_roundtrip_through_panel() {
+    use fancy_renamer::engine::{Id3Mode, RulePreset};
+
+    ui(|| {
+        let panel = RulePanel::new();
+        let preset = Preset {
+            name: "Musik".into(),
+            rules: vec![RulePreset::Id3Tags {
+                format: "{track} - {artist} - {title}".into(),
+                mode: Id3Mode::Prefix,
+            }],
+        };
+        panel.apply_preset(&preset);
+        assert_eq!(panel.snapshot(), preset.rules);
+        assert_eq!(panel.build_chain().unwrap().ids(), vec!["id3_tags"]);
+
+        // Unbekannter Platzhalter wird beim Kettenaufbau abgelehnt.
+        panel.apply_preset(&Preset {
+            name: "Kaputt".into(),
+            rules: vec![RulePreset::Id3Tags {
+                format: "{genre}".into(),
+                mode: Id3Mode::Replace,
+            }],
+        });
+        assert!(panel.build_chain().is_err());
+    });
+}
+
+#[test]
 fn preset_menu_lists_saved_presets() {
     ui(|| {
         use fancy_renamer::engine::{Preset, Presets};
