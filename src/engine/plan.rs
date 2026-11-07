@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::engine::{FileGroup, FileItem, RuleChain, RuleContext};
+use crate::engine::{FileGroup, FileItem, RuleChain, RuleContext, RuleOutcome};
 
 /// Bewertung einer Zeile der Vorschau.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,8 @@ pub enum PlanStatus {
     InvalidName,
     /// Eine Regel konnte nicht angewendet werden (z. B. ungültiges Regex).
     RuleError,
+    /// Eine Regel kann die Datei nicht bearbeiten (z. B. keine EXIF-Daten).
+    Skipped,
 }
 
 impl PlanStatus {
@@ -45,6 +47,7 @@ impl PlanStatus {
             Self::Duplicate => "doppelter Zielname",
             Self::InvalidName => "ungültiger Name",
             Self::RuleError => "Regelfehler",
+            Self::Skipped => "keine Metadaten",
         }
     }
 }
@@ -57,6 +60,8 @@ pub struct PlanRow {
     pub new_path: PathBuf,
     pub status: PlanStatus,
     pub rule_error: Option<String>,
+    /// Hinweis zur Zeile, z. B. warum eine Regel die Datei übersprungen hat.
+    pub note: Option<String>,
 }
 
 /// Ergebnis der Vorschau. Die Ausführung nimmt genau diesen Plan entgegen.
@@ -105,12 +110,21 @@ pub fn build_plan(groups: &[FileGroup], chain: &RuleChain) -> RenamePlan {
         let result = chain.apply(&group.original_stem, &ctx);
         for item in &group.members {
             rows.push(match &result {
-                Ok(new_stem) => PlanRow {
+                Ok(RuleOutcome::Stem(new_stem)) => PlanRow {
                     new_path: item.target_path(new_stem),
                     new_stem: new_stem.clone(),
                     item: item.clone(),
                     status: PlanStatus::Unchanged,
                     rule_error: None,
+                    note: None,
+                },
+                Ok(RuleOutcome::Skip(reason)) => PlanRow {
+                    new_path: item.path.clone(),
+                    new_stem: item.stem.clone(),
+                    item: item.clone(),
+                    status: PlanStatus::Skipped,
+                    rule_error: None,
+                    note: Some(reason.to_string()),
                 },
                 Err(error) => PlanRow {
                     new_path: item.path.clone(),
@@ -118,13 +132,14 @@ pub fn build_plan(groups: &[FileGroup], chain: &RuleChain) -> RenamePlan {
                     item: item.clone(),
                     status: PlanStatus::RuleError,
                     rule_error: Some(error.to_string()),
+                    note: None,
                 },
             });
         }
     }
 
     for row in &mut rows {
-        if row.status == PlanStatus::RuleError {
+        if matches!(row.status, PlanStatus::RuleError | PlanStatus::Skipped) {
             continue;
         }
         if row.new_path == row.item.path {
