@@ -1,0 +1,29 @@
+name: Feature / Anforderung
+description: Neue Funktion oder Anforderung vorschlagen
+labels: [feature, needs-spec]
+body:
+  - type: textarea
+    id: ziel
+    attributes:
+      label: Ziel / User Story
+      placeholder: Als Nutzer möchte ich ..., damit ...
+    validations:
+      required: true
+  - type: textarea
+    id: akzeptanz
+    attributes:
+      label: Akzeptanzkriterien
+      description: Konkret und prüfbar – die KI implementiert genau hiergegen.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: nicht-ziele
+    attributes:
+      label: Nicht-Ziele / Abgrenzung
+  - type: textarea
+    id: kontext
+    attributes:
+      label: Zusätzlicher Kontext (Mockups, Beispiele)

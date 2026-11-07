@@ -1,0 +1,19 @@
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Umgebungen / Secrets
+.env
+.env.*
+
+# Build-Artefakte (wird ergänzt, sobald der Stack feststeht)
+/build/
+/dist/
+/target/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
