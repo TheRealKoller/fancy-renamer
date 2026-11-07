@@ -49,6 +49,19 @@ pub fn run() -> Result<()> {
         .build();
 
     app.connect_startup(|app| {
+        // Rückmeldung für Drop-Ziele.
+        let css = gtk::CssProvider::new();
+        css.load_from_string(
+            ".drop-highlight { background-color: alpha(@accent_bg_color, 0.25); }",
+        );
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &css,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+
         for (action, accels) in [
             ("win.open", vec!["<Control>o"]),
             ("win.rename", vec!["<Control>Return"]),
@@ -166,6 +179,21 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
 
     let toast_overlay = libadwaita::ToastOverlay::new();
     toast_overlay.set_child(Some(&toolbar_view));
+
+    // Übersprungene Pfade melden (nicht vorhanden, nicht lesbar).
+    let report_skipped: Rc<dyn Fn(Vec<PathBuf>)> = {
+        let toast_overlay = toast_overlay.clone();
+        Rc::new(move |paths: Vec<PathBuf>| {
+            if paths.is_empty() {
+                return;
+            }
+            let text = match paths.len() {
+                1 => format!("Nicht aufgenommen: {}", paths[0].display()),
+                count => format!("{count} Pfad(e) nicht aufgenommen (nicht lesbar)"),
+            };
+            toast_overlay.add_toast(libadwaita::Toast::new(&text));
+        })
+    };
 
     let window = libadwaita::ApplicationWindow::builder()
         .application(app)
@@ -285,6 +313,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             let window = window.clone();
             let state = state.clone();
             let refresh = refresh.clone();
+            let report_skipped = report_skipped.clone();
             Rc::new(move || {
                 let dialog = gtk::FileDialog::builder()
                     .title("Dateien auswählen")
@@ -292,6 +321,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
                     .build();
                 let state = state.clone();
                 let refresh = refresh.clone();
+                let report_skipped = report_skipped.clone();
                 dialog.open_multiple(Some(&window), gio::Cancellable::NONE, move |result| {
                     match result {
                         Ok(files) => {
@@ -301,7 +331,8 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
                                     .and_then(|object| object.downcast::<gio::File>().ok())
                                     .and_then(|file| file.path())
                             });
-                            state::add_paths(&state, paths);
+                            let skipped = state::add_paths(&state, paths);
+                            report_skipped.as_ref()(skipped);
                             refresh();
                         }
                         Err(error) => {
@@ -312,33 +343,37 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
             })
         };
 
-    let add_folder: Rc<dyn Fn()> =
-        {
-            let window = window.clone();
+    let add_folder: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let state = state.clone();
+        let refresh = refresh.clone();
+        let report_skipped = report_skipped.clone();
+        Rc::new(move || {
+            let dialog = gtk::FileDialog::builder()
+                .title("Ordner auswählen")
+                .modal(true)
+                .build();
             let state = state.clone();
             let refresh = refresh.clone();
-            Rc::new(move || {
-                let dialog = gtk::FileDialog::builder()
-                    .title("Ordner auswählen")
-                    .modal(true)
-                    .build();
-                let state = state.clone();
-                let refresh = refresh.clone();
-                dialog.select_folder(Some(&window), gio::Cancellable::NONE, move |result| {
-                    match result {
-                        Ok(folder) => {
-                            if let Some(path) = folder.path() {
-                                state::add_paths(&state, state::files_in_folder(&path));
-                                refresh();
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("Ordnerauswahl abgebrochen: {error}");
+            let report_skipped = report_skipped.clone();
+            dialog.select_folder(
+                Some(&window),
+                gio::Cancellable::NONE,
+                move |result| match result {
+                    Ok(folder) => {
+                        if let Some(path) = folder.path() {
+                            let skipped = state::add_paths(&state, state::files_in_folder(&path));
+                            report_skipped.as_ref()(skipped);
+                            refresh();
                         }
                     }
-                });
-            })
-        };
+                    Err(error) => {
+                        eprintln!("Ordnerauswahl abgebrochen: {error}");
+                    }
+                },
+            );
+        })
+    };
 
     let clear_all: Rc<dyn Fn()> = {
         let state = state.clone();
@@ -447,8 +482,10 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     let add_from_outside: AddPaths = {
         let state = state.clone();
         let refresh = refresh.clone();
+        let report_skipped = report_skipped.clone();
         Rc::new(move |paths: Vec<PathBuf>| {
-            state::add_paths(&state, paths);
+            let skipped = state::add_paths(&state, paths);
+            report_skipped.as_ref()(skipped);
             refresh();
         })
     };
@@ -456,6 +493,36 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     if !initial.is_empty() {
         add_from_outside(initial);
     }
+
+    // Drag & Drop: Dateien und Ordner auf die Liste ziehen.
+    let drop_area = gtk::DropTarget::new(
+        gtk::gdk::FileList::static_type(),
+        gtk::gdk::DragAction::COPY,
+    );
+    drop_area.connect_enter({
+        let stack = stack.clone();
+        move |_, _, _| {
+            stack.add_css_class("drop-highlight");
+            gtk::gdk::DragAction::COPY
+        }
+    });
+    drop_area.connect_leave({
+        let stack = stack.clone();
+        move |_| stack.remove_css_class("drop-highlight")
+    });
+    drop_area.connect_drop({
+        let stack = stack.clone();
+        let add_from_outside = add_from_outside.clone();
+        move |_, value, _, _| {
+            stack.remove_css_class("drop-highlight");
+            let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                return false;
+            };
+            add_from_outside(state::paths_from_drop(&files));
+            true
+        }
+    });
+    stack.add_controller(drop_area);
 
     add_button.connect_clicked(move |_| add_files());
     let add_folder_for_button = add_folder.clone();

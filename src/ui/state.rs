@@ -2,9 +2,13 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
+
+use gtk::prelude::*;
 use std::time::Duration;
 
-use crate::engine::{FileGroup, FileItem, RenamePlan, RuleChain, build_plan};
+use crate::engine::{
+    FileGroup, FileItem, RenamePlan, RuleChain, build_plan, natural_cmp, sort_items,
+};
 
 /// Alles, was die Oberfläche anzeigt: Dateiliste, Regelkette und die daraus
 /// berechnete Vorschau.
@@ -40,26 +44,36 @@ impl AppState {
     }
 }
 
-/// Dateien übernehmen; bereits enthaltene Pfade werden übersprungen.
-pub fn add_paths(state: &SharedState, paths: impl IntoIterator<Item = PathBuf>) {
+/// Dateien übernehmen und natürlich sortieren. Bereits enthaltene Pfade werden
+/// still übersprungen; nicht existierende oder nicht lesbare Pfade werden
+/// zurückgegeben, damit die Oberfläche sie melden kann.
+pub fn add_paths(state: &SharedState, paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
     let mut state = state.borrow_mut();
+    let mut rejected = Vec::new();
     for path in paths {
-        let path = path.canonicalize().unwrap_or(path);
-        if state.items.iter().any(|item| item.path == path) {
+        let Ok(canonical) = path.canonicalize() else {
+            rejected.push(path);
+            continue;
+        };
+        if state.items.iter().any(|item| item.path == canonical) {
             continue;
         }
-        if let Ok(item) = FileItem::from_path(path) {
-            state.items.push(item);
+        match FileItem::from_path(canonical) {
+            Ok(item) => state.items.push(item),
+            Err(_) => rejected.push(path),
         }
     }
+    sort_items(&mut state.items);
+    rejected
 }
 
-/// Dateien der obersten Ebene eines Ordners, ohne versteckte Dateien.
+/// Dateien der obersten Ebene eines Ordners (nicht rekursiv), ohne versteckte
+/// Dateien, natürlich sortiert.
 pub fn files_in_folder(folder: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
-    entries
+    let mut paths = entries
         .flatten()
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|entry| entry.path())
@@ -69,7 +83,29 @@ pub fn files_in_folder(folder: &Path) -> Vec<PathBuf> {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with('.'))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    paths.sort_by(|a, b| natural_cmp(&name_of(a), &name_of(b)));
+    paths
+}
+
+/// Pfade aus einer Drag-&-Drop-Ablage: Dateien direkt, Ordner über ihren
+/// Inhalt der obersten Ebene.
+pub fn paths_from_drop(files: &gtk::gdk::FileList) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for file in files.files() {
+        match file.path() {
+            Some(path) if path.is_dir() => paths.extend(files_in_folder(&path)),
+            Some(path) => paths.push(path),
+            None => {}
+        }
+    }
+    paths
+}
+
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Plan im Hintergrund berechnen und im GTK-Hauptloop abholen. Wird ab etwa
