@@ -85,7 +85,7 @@ Ziel: Jedes Issue hat am Ende eine klare User Story, **prüfbare Akzeptanzkriter
 
 - **Sprache:** Rust (Edition 2024), Toolchain per rustup (stabil).
 - **UI:** GTK4 + libadwaita über `gtk4-rs`; Systempakete `gtk4-devel`, `libadwaita-devel`.
-- **Struktur:** ein Crate (`fancy-renamer`) mit `src/core/` (reine Domänenlogik, **keine** GTK-Abhängigkeiten) und `src/ui/` (GTK). Tests der Domänenlogik laufen ohne Display, mit `tempfile` statt echten Nutzerdateien.
+- **Struktur:** ein Crate (`fancy-renamer`) mit `src/engine/` (reine Domänenlogik, **keine** GTK-Abhängigkeiten) und `src/ui/` (GTK). Tests der Domänenlogik laufen ohne Display, mit `tempfile` statt echten Nutzerdateien. Modulname bewusst `engine`, nicht `core`: `mod core` würde das Prelude-Crate `core` verschatten.
 - **Regex:** `regex`-Crate (kein Backtracking, keine Backreferences).
 - **Packaging:** v1 nur aus dem Quellcode (`cargo build --release`, binär nach `~/.local/bin`); Flatpak/RPM später.
 - **Befehle:**

@@ -9,10 +9,10 @@
 .env
 .env.*
 
-# Build-Artefakte (wird ergänzt, sobald der Stack feststeht)
-/build/
-/dist/
+# Rust
 /target/
+
+# Python/Node-Reste aus früherem Gerüst
 __pycache__/
 *.pyc
 .venv/
