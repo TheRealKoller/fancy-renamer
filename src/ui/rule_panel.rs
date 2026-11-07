@@ -15,6 +15,7 @@ type ChangeHandler = Rc<dyn Fn()>;
 /// und in ihrer Reihenfolge veränderbar.
 pub struct RulePanel {
     container: gtk::Box,
+    hint: gtk::Label,
     cards: RefCell<Vec<CardEntry>>,
     error_label: gtk::Label,
     on_change: ChangeHandler,
@@ -29,6 +30,7 @@ trait RuleCard {
 
 struct CardEntry {
     card: Box<dyn RuleCard>,
+    badge: gtk::Label,
     up: gtk::Button,
     down: gtk::Button,
 }
@@ -42,30 +44,66 @@ impl RulePanel {
         container.set_margin_start(12);
         container.set_margin_end(12);
 
+        let hint = gtk::Label::new(Some(
+            "Regeln werden von oben nach unten angewendet – jede Regel arbeitet auf dem \
+             Ergebnis der vorherigen.",
+        ));
+        hint.add_css_class("dim-label");
+        hint.set_wrap(true);
+        hint.set_xalign(0.0);
+        container.append(&hint);
+
         let error_label = gtk::Label::new(None);
         error_label.add_css_class("error");
         error_label.set_wrap(true);
         error_label.set_xalign(0.0);
         error_label.set_visible(false);
 
+        // Karten melden Änderungen an das Panel, das erst nach dem Bau der
+        // Karten existiert; deshalb der Umweg über einen schwachen Verweis.
+        let notify: Rc<RefCell<Option<ChangeHandler>>> = Rc::new(RefCell::new(None));
+        let notify_for_cards = notify.clone();
+        let card_change: ChangeHandler = Rc::new(move || {
+            let callback = notify_for_cards.borrow().clone();
+            if let Some(callback) = callback {
+                callback();
+            }
+        });
+
         let cards: Vec<Box<dyn RuleCard>> = vec![
-            Box::new(ReplaceCard::new(on_change.clone())),
-            Box::new(NumberingCard::new(on_change.clone())),
-            Box::new(NormalizeCard::new(on_change.clone())),
-            Box::new(ExifCard::new(on_change.clone())),
+            Box::new(ReplaceCard::new(card_change.clone())),
+            Box::new(NumberingCard::new(card_change.clone())),
+            Box::new(NormalizeCard::new(card_change.clone())),
+            Box::new(ExifCard::new(card_change.clone())),
         ];
 
         let entries = cards
             .into_iter()
             .map(|card| {
+                let badge = gtk::Label::new(Some("–"));
+                badge.add_css_class("numeric");
+                badge.add_css_class("dim-label");
+                badge.set_width_chars(2);
+                badge.set_valign(gtk::Align::Center);
+
                 let up = reorder_button("go-up-symbolic", "Regel nach oben");
                 let down = reorder_button("go-down-symbolic", "Regel nach unten");
-                let prefix = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                prefix.add_css_class("linked");
-                prefix.append(&up);
-                prefix.append(&down);
+                let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                buttons.add_css_class("linked");
+                buttons.append(&up);
+                buttons.append(&down);
+
+                let prefix = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                prefix.append(&badge);
+                prefix.append(&buttons);
                 card.expander().add_prefix(&prefix);
-                CardEntry { card, up, down }
+
+                CardEntry {
+                    card,
+                    badge,
+                    up,
+                    down,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -76,12 +114,24 @@ impl RulePanel {
 
         let panel = Rc::new(Self {
             container,
+            hint,
             cards: RefCell::new(entries),
             error_label,
             on_change,
         });
+
+        let weak = Rc::downgrade(&panel);
+        let external = panel.on_change.clone();
+        *notify.borrow_mut() = Some(Rc::new(move || {
+            if let Some(panel) = weak.upgrade() {
+                panel.sync_ordinals();
+            }
+            external();
+        }));
+
         panel.wire_reorder();
         panel.sync_buttons();
+        panel.sync_ordinals();
         panel
     }
 
@@ -111,39 +161,49 @@ impl RulePanel {
     }
 
     fn wire_reorder(self: &Rc<Self>) {
-        let count = self.cards.borrow().len();
-        for index in 0..count {
-            let (up, down) = {
-                let cards = self.cards.borrow();
-                (cards[index].up.clone(), cards[index].down.clone())
-            };
+        for entry in self.cards.borrow().iter() {
+            let expander = entry.card.expander().clone();
             let panel = Rc::clone(self);
-            up.connect_clicked(move |_| panel.move_card(index, -1));
+            let target = expander.clone();
+            entry
+                .up
+                .connect_clicked(move |_| panel.move_card(&target, -1));
             let panel = Rc::clone(self);
-            down.connect_clicked(move |_| panel.move_card(index, 1));
+            let target = expander.clone();
+            entry
+                .down
+                .connect_clicked(move |_| panel.move_card(&target, 1));
         }
     }
 
-    /// Karte um eine Position verschieben; Ränder sind No-Ops.
-    fn move_card(self: &Rc<Self>, index: usize, delta: isize) {
-        let len = self.cards.borrow().len();
+    /// Karte um eine Position verschieben; Ränder sind No-Ops. Die Position
+    /// wird über die Karte selbst gesucht, nicht über einen beim Verdrahten
+    /// festgehaltenen Index.
+    fn move_card(self: &Rc<Self>, expander: &libadwaita::ExpanderRow, delta: isize) {
+        let mut cards = self.cards.borrow_mut();
+        let Some(index) = cards
+            .iter()
+            .position(|entry| entry.card.expander() == expander)
+        else {
+            return;
+        };
         let Some(target) = index.checked_add_signed(delta) else {
             return;
         };
-        if target >= len {
+        if target >= cards.len() {
             return;
         }
-        {
-            let mut cards = self.cards.borrow_mut();
-            cards.swap(index, target);
-            for entry in cards.iter() {
-                self.container
-                    .reorder_child_after(entry.card.expander(), None::<&gtk::Widget>);
-            }
-            self.container
-                .reorder_child_after(&self.error_label, None::<&gtk::Widget>);
-        }
+        cards.swap(index, target);
+        let anchor: gtk::Widget = if target == 0 {
+            self.hint.clone().upcast()
+        } else {
+            cards[target - 1].card.expander().clone().upcast()
+        };
+        self.container.reorder_child_after(expander, Some(&anchor));
+        drop(cards);
+
         self.sync_buttons();
+        self.sync_ordinals();
         (self.on_change)();
     }
 
@@ -153,6 +213,23 @@ impl RulePanel {
         for (index, entry) in cards.iter().enumerate() {
             entry.up.set_sensitive(index > 0);
             entry.down.set_sensitive(index < last);
+        }
+    }
+
+    /// Nummeriert die aktiven Regeln in Anwendungsreihenfolge; inaktive
+    /// Karten zeigen einen Strich.
+    fn sync_ordinals(&self) {
+        let cards = self.cards.borrow();
+        let mut step = 0;
+        for entry in cards.iter() {
+            if entry.card.enabled() {
+                step += 1;
+                entry.badge.remove_css_class("dim-label");
+                entry.badge.set_text(&step.to_string());
+            } else {
+                entry.badge.add_css_class("dim-label");
+                entry.badge.set_text("–");
+            }
         }
     }
 }
@@ -308,6 +385,17 @@ impl NumberingCard {
         );
 
         let (mode_row, mode) = dropdown_row("Modus", &["Stamm ersetzen", "anhängen"]);
+        // Standard ist Anhängen: so bleibt das Ergebnis vorheriger Regeln
+        // (z. B. EXIF-Datum) erhalten.
+        mode.set_selected(1);
+        let replace_hint = gtk::Label::new(Some(
+            "Stamm ersetzen verwirft das Ergebnis vorheriger Regeln.",
+        ));
+        replace_hint.add_css_class("dim-label");
+        replace_hint.set_wrap(true);
+        replace_hint.set_xalign(0.0);
+        replace_hint.set_margin_top(6);
+        replace_hint.set_visible(false);
         let start = gtk::SpinButton::with_range(0.0, 1_000_000.0, 1.0);
         start.set_value(1.0);
         let start_row = libadwaita::ActionRow::builder().title("Startwert").build();
@@ -340,6 +428,12 @@ impl NumberingCard {
         ] {
             expander.add_row(row);
         }
+        expander.add_row(&replace_hint);
+
+        let hint_for_mode = replace_hint.clone();
+        mode.connect_selected_notify(move |dropdown| {
+            hint_for_mode.set_visible(dropdown.selected() == 0);
+        });
 
         on_text_changed(&prefix, &on_change);
         on_text_changed(&suffix, &on_change);

@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{Sender, channel};
 
 use gtk::prelude::*;
+use libadwaita::prelude::*;
 
 use fancy_renamer::engine::{
     ExifDateRule, ExifMode, FileGroup, FileItem, MatchMode, PlanStatus, ReplaceRule, RuleChain,
@@ -79,6 +80,234 @@ fn state_with(paths: &[PathBuf], chain: Option<RuleChain>) -> AppState {
     };
     state.refresh();
     state
+}
+
+/// Zeilentitel sind Pango-Markup; für Vergleiche den reinen Text.
+fn plain_title(markup: &str) -> String {
+    match gtk::pango::parse_markup(markup, '\0') {
+        Ok((_, text, _)) => text.to_string(),
+        Err(_) => markup.to_string(),
+    }
+}
+
+fn rule_titles(panel: &RulePanel) -> Vec<String> {
+    let mut titles = Vec::new();
+    let mut child = panel.widget().first_child();
+    while let Some(widget) = child {
+        let widget: &gtk::Widget = widget.upcast_ref();
+        if let Some(row) = widget.downcast_ref::<libadwaita::ExpanderRow>() {
+            titles.push(plain_title(&row.title()));
+        }
+        child = widget.next_sibling();
+    }
+    titles
+}
+
+fn find_expander(widget: &impl IsA<gtk::Widget>, title: &str) -> Option<libadwaita::ExpanderRow> {
+    let widget: &gtk::Widget = widget.upcast_ref();
+    if let Some(row) = widget.downcast_ref::<libadwaita::ExpanderRow>() {
+        if plain_title(&row.title()) == title {
+            return Some(row.clone());
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if let Some(found) = find_expander(&node, title) {
+            return Some(found);
+        }
+        child = node.next_sibling();
+    }
+    None
+}
+
+fn find_button(widget: &impl IsA<gtk::Widget>, tooltip: &str) -> Option<gtk::Button> {
+    let widget: &gtk::Widget = widget.upcast_ref();
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        if button.tooltip_text().as_deref() == Some(tooltip) {
+            return Some(button.clone());
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if let Some(found) = find_button(&node, tooltip) {
+            return Some(found);
+        }
+        child = node.next_sibling();
+    }
+    None
+}
+
+/// Enthält der Teilbaum ein sichtbares Label mit diesem Text?
+fn label_visible(widget: &impl IsA<gtk::Widget>, needle: &str) -> bool {
+    let widget: &gtk::Widget = widget.upcast_ref();
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        if label.text().contains(needle) && label.is_visible() {
+            return true;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if label_visible(&node, needle) {
+            return true;
+        }
+        child = node.next_sibling();
+    }
+    false
+}
+
+fn find_dropdown(widget: &impl IsA<gtk::Widget>) -> Option<gtk::DropDown> {
+    let widget: &gtk::Widget = widget.upcast_ref();
+    if let Some(found) = widget.downcast_ref::<gtk::DropDown>() {
+        return Some(found.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if let Some(found) = find_dropdown(&node) {
+            return Some(found);
+        }
+        child = node.next_sibling();
+    }
+    None
+}
+
+fn find_switch(widget: &impl IsA<gtk::Widget>) -> Option<gtk::Switch> {
+    let widget: &gtk::Widget = widget.upcast_ref();
+    if let Some(found) = widget.downcast_ref::<gtk::Switch>() {
+        return Some(found.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(node) = child {
+        if let Some(found) = find_switch(&node) {
+            return Some(found);
+        }
+        child = node.next_sibling();
+    }
+    None
+}
+
+/// Schrittnummer, die eine Karte anzeigt.
+fn badge_text(row: &libadwaita::ExpanderRow) -> String {
+    fn walk(widget: &gtk::Widget) -> Option<String> {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            if label.has_css_class("numeric") {
+                return Some(label.text().to_string());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(node) = child {
+            if let Some(found) = walk(&node) {
+                return Some(found);
+            }
+            child = node.next_sibling();
+        }
+        None
+    }
+    walk(row.upcast_ref()).unwrap_or_default()
+}
+
+#[test]
+fn numbering_appends_by_default_so_earlier_rules_survive() {
+    ui(|| {
+        let panel = RulePanel::new(|| {});
+        let numbering = find_expander(panel.widget(), "Nummerierung").unwrap();
+        let mode = find_dropdown(&numbering).unwrap();
+        assert_eq!(mode.selected(), 1);
+        assert!(!label_visible(&numbering, "verwirft"));
+
+        // „Stamm ersetzen“ blendet den Hinweis ein, dass vorherige Regeln
+        // verworfen werden.
+        mode.set_selected(0);
+        assert!(label_visible(&numbering, "verwirft"));
+        mode.set_selected(1);
+        assert!(!label_visible(&numbering, "verwirft"));
+    });
+}
+
+#[test]
+fn active_rules_show_their_step_number_in_chain_order() {
+    ui(|| {
+        let panel = RulePanel::new(|| {});
+        let replace = find_expander(panel.widget(), "Suchen & Ersetzen").unwrap();
+        let numbering = find_expander(panel.widget(), "Nummerierung").unwrap();
+        assert_eq!(badge_text(&replace), "–");
+
+        find_switch(&numbering).unwrap().set_active(true);
+        assert_eq!(badge_text(&numbering), "1");
+        assert_eq!(badge_text(&replace), "–");
+
+        // Suchen & Ersetzen steht über Nummerierung: nach dem Aktivieren
+        // bekommt es die 1, die Nummerierung rückt auf 2.
+        find_switch(&replace).unwrap().set_active(true);
+        assert_eq!(badge_text(&replace), "1");
+        assert_eq!(badge_text(&numbering), "2");
+
+        // Verschieben ändert die Anwendungsreihenfolge und damit die Nummern.
+        find_button(&numbering, "Regel nach oben")
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(rule_titles(&panel)[0], "Nummerierung");
+        assert_eq!(badge_text(&numbering), "1");
+        assert_eq!(badge_text(&replace), "2");
+    });
+}
+
+#[test]
+fn rules_move_step_by_step_in_both_directions() {
+    ui(|| {
+        let panel = RulePanel::new(|| {});
+        assert_eq!(
+            rule_titles(&panel),
+            [
+                "Suchen & Ersetzen",
+                "Nummerierung",
+                "Namen normalisieren",
+                "Aufnahmedatum (EXIF)"
+            ]
+        );
+
+        let exif = find_expander(panel.widget(), "Aufnahmedatum (EXIF)").unwrap();
+        for _ in 0..3 {
+            find_button(&exif, "Regel nach oben")
+                .unwrap()
+                .emit_clicked();
+        }
+        assert_eq!(rule_titles(&panel)[0], "Aufnahmedatum (EXIF)");
+
+        // Nach dem Verschieben bleibt die Karte bedienbar, obwohl sich ihre
+        // Position geändert hat.
+        find_button(&exif, "Regel nach unten")
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(rule_titles(&panel)[1], "Aufnahmedatum (EXIF)");
+
+        // An Position 1 sind beide Richtungen möglich.
+        let exif = find_expander(panel.widget(), "Aufnahmedatum (EXIF)").unwrap();
+        assert!(
+            find_button(&exif, "Regel nach oben")
+                .unwrap()
+                .is_sensitive()
+        );
+        assert!(
+            find_button(&exif, "Regel nach unten")
+                .unwrap()
+                .is_sensitive()
+        );
+
+        // Ränder sind No-Ops, die Buttons dort sind deaktiviert.
+        let top_title = rule_titles(&panel)[0].clone();
+        let top = find_expander(panel.widget(), &top_title).unwrap();
+        let up = find_button(&top, "Regel nach oben").unwrap();
+        assert!(!up.is_sensitive());
+        up.emit_clicked();
+        assert_eq!(rule_titles(&panel)[0], top_title);
+
+        let bottom_title = rule_titles(&panel)[3].clone();
+        let bottom = find_expander(panel.widget(), &bottom_title).unwrap();
+        let down = find_button(&bottom, "Regel nach unten").unwrap();
+        assert!(!down.is_sensitive());
+        down.emit_clicked();
+        assert_eq!(rule_titles(&panel)[3], bottom_title);
+    });
 }
 
 #[test]

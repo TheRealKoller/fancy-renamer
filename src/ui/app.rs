@@ -161,17 +161,22 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     action_bar.append(&summary);
     action_bar.append(&rename_button);
 
-    // Regeln und Liste übereinander
+    // Regeln und Vorschau teilen sich den Platz; die Trennlinie ist ziehbar,
+    // damit der Einstellungsbereich bei Bedarf wachsen kann.
     let rules_scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(320)
         .child(panel.widget())
         .build();
+    let paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    paned.set_start_child(Some(&rules_scroll));
+    paned.set_end_child(Some(&stack));
+    paned.set_resize_start_child(true);
+    paned.set_resize_end_child(true);
+    paned.set_wide_handle(true);
+    paned.set_position(460);
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&rules_scroll);
-    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    content.append(&stack);
+    content.append(&paned);
 
     let toolbar_view = libadwaita::ToolbarView::builder().content(&content).build();
     toolbar_view.add_top_bar(&header);
@@ -199,7 +204,7 @@ fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
         .application(app)
         .title("fancy-renamer")
         .default_width(1100)
-        .default_height(760)
+        .default_height(800)
         .content(&toast_overlay)
         .build();
 

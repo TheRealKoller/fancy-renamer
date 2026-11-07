@@ -62,8 +62,10 @@ fancy-renamer ~/Bilder/*.jpg
 Die Liste bleibt natürlich sortiert (`foto2` vor `foto10`), doppelte Pfade werden nicht erneut
 aufgenommen, nicht lesbare Pfade meldet ein Hinweis.
 
-Im Regelbereich lassen sich die vier Karten kombinieren, per Hoch/Runter umsortieren und einzeln
-abschalten; die Reihenfolge der Karten ist die Reihenfolge der Regeln. Jede Änderung berechnet die
+Im Regelbereich lassen sich die vier Karten kombinieren, per Pfeiltasten umsortieren und einzeln
+abschalten. Die Karten werden **von oben nach unten** angewendet, jede Regel arbeitet auf dem
+Ergebnis der vorherigen; aktive Karten tragen ihre Schrittnummer. Die Trennlinie zwischen Regeln und
+Vorschau ist ziehbar, der Regelbereich lässt sich so vergrößern. Jede Änderung berechnet die
 Vorschau neu (entprellt), große Listen im Hintergrund. Zeilen mit Problemen (Kollision, doppelter
 Name, ungültiger Name) blockieren **Umbenennen** und nennen den Grund im Tooltip.
 
