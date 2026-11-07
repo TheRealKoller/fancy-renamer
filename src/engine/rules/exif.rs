@@ -71,7 +71,7 @@ impl Rule for ExifDateRule {
 /// Aufnahmezeitpunkt lesen; `None`, wenn keine passenden Metadaten lesbar sind.
 fn read_capture_date(path: &Path) -> Option<NaiveDateTime> {
     let file = File::open(path).ok()?;
-    let mut reader = exif::Reader::new();
+    let reader = exif::Reader::new();
     let exif = reader.read_from_container(&mut BufReader::new(file)).ok()?;
     let tags = [
         exif::Tag::DateTimeOriginal,
