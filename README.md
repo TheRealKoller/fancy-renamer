@@ -17,6 +17,28 @@ Technik: Rust + GTK4/libadwaita. Lizenz: GPL-3.0.
 
 - Rust (Edition 2024, mindestens 1.85) – z. B. per [rustup](https://rustup.rs).
 
+## Installation
+
+Version 1.0 wird aus der Quelle installiert (kein Flatpak, kein RPM):
+
+```sh
+git clone https://github.com/TheRealKoller/fancy-renamer.git
+cd fancy-renamer
+./install.sh
+```
+
+Das Skript baut im Release-Modus und legt ab:
+
+| Datei | Ziel |
+|---|---|
+| `fancy-renamer` | `${XDG_BIN_HOME:-~/.local/bin}` |
+| `io.github.therealKoller.FancyRenamer.desktop` | `${XDG_DATA_HOME:-~/.local/share}/applications` |
+| `io.github.therealKoller.FancyRenamer.svg` | `${XDG_DATA_HOME:-~/.local/share}/icons/hicolor/scalable/apps` |
+
+Danach erscheint **fancy-renamer** in der Anwendungsübersicht. Ziele lassen sich über `PREFIX`,
+`XDG_BIN_HOME` und `XDG_DATA_HOME` ändern. `PREFIX=~/.local ./install.sh` installiert nach
+`~/.local`; `./uninstall.sh` entfernt die abgelegten Dateien wieder (mit denselben Variablen).
+
 ## Bauen, starten, testen
 
 ```sh
