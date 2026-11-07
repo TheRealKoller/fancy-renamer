@@ -6,8 +6,9 @@ use std::time::Duration;
 use anyhow::Result;
 use gtk::gio;
 use gtk::prelude::*;
+use libadwaita::prelude::*;
 
-use crate::engine::{FileItem, ExecutionReport, execute};
+use crate::engine::{ExecutionReport, FileItem, execute};
 
 use super::rule_panel::RulePanel;
 use super::state::{AppState, SharedState};
@@ -15,9 +16,36 @@ use super::{file_list, state};
 
 const APP_ID: &str = "io.github.therealKoller.FancyRenamer";
 
+/// Callback-Slot, über den der Regelbereich die Vorschau auslöst.
+type ChangeSlot = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
+/// Übernimmt Pfade, die von außen hereinkommen (Kommandozeile, Dateimanager).
+type AddPaths = Rc<dyn Fn(Vec<PathBuf>)>;
+
+thread_local! {
+    static ADD_CALLBACK: RefCell<Option<AddPaths>> = const { RefCell::new(None) };
+}
+
+fn add_callback() -> Option<AddPaths> {
+    ADD_CALLBACK.with(|slot| slot.borrow().clone())
+}
+
+/// Pfade, die beim Start bereits übergeben wurden.
+fn pending_paths() -> Vec<PathBuf> {
+    std::env::args_os()
+        .skip(1)
+        .filter(|argument| !argument.to_string_lossy().starts_with('-'))
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Callback mit Ergebnis der Ausführung.
+type FinishCallback = Rc<dyn Fn(Result<ExecutionReport, crate::engine::ExecuteError>)>;
+
 pub fn run() -> Result<()> {
     let app = libadwaita::Application::builder()
         .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
     app.connect_startup(|app| {
@@ -29,13 +57,28 @@ pub fn run() -> Result<()> {
             app.set_accels_for_action(action, &accels);
         }
     });
-    app.connect_activate(build_window);
+    app.connect_activate(|app| {
+        let pending = pending_paths();
+        build_window(app, pending);
+    });
+    app.connect_open(|app, files, _hint| {
+        if app.active_window().is_none() {
+            build_window(app, Vec::new());
+        }
+        let paths = files
+            .iter()
+            .filter_map(|file| file.path())
+            .collect::<Vec<_>>();
+        if let Some(add) = add_callback() {
+            add(paths);
+        }
+    });
 
     app.run();
     Ok(())
 }
 
-fn build_window(app: &libadwaita::Application) {
+fn build_window(app: &libadwaita::Application, initial: Vec<PathBuf>) {
     let state: SharedState = Rc::new(RefCell::new(AppState::default()));
 
     let header = libadwaita::HeaderBar::new();
@@ -55,16 +98,8 @@ fn build_window(app: &libadwaita::Application) {
     header.pack_start(&folder_button);
     header.pack_end(&clear_button);
 
-    let window = libadwaita::ApplicationWindow::builder()
-        .application(app)
-        .title("fancy-renamer")
-        .default_width(1100)
-        .default_height(760)
-        .build();
-    window.set_titlebar(Some(&header));
-
     // Regelbereich
-    let fire: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let fire: ChangeSlot = Rc::new(RefCell::new(None));
     let fire_for_panel = fire.clone();
     let panel = Rc::new(RulePanel::new(move || {
         if let Some(callback) = fire_for_panel.borrow().as_ref() {
@@ -124,14 +159,20 @@ fn build_window(app: &libadwaita::Application) {
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     content.append(&stack);
 
-    let toolbar_view = libadwaita::ToolbarView::builder()
-        .content(&content)
-        .build();
+    let toolbar_view = libadwaita::ToolbarView::builder().content(&content).build();
+    toolbar_view.add_top_bar(&header);
     toolbar_view.add_bottom_bar(&action_bar);
 
     let toast_overlay = libadwaita::ToastOverlay::new();
     toast_overlay.set_child(Some(&toolbar_view));
-    window.set_content(Some(&toast_overlay));
+
+    let window = libadwaita::ApplicationWindow::builder()
+        .application(app)
+        .title("fancy-renamer")
+        .default_width(1100)
+        .default_height(760)
+        .content(&toast_overlay)
+        .build();
 
     // Vorschau neu berechnen (entprellt, damit Tippen nicht jedes Zeichen rechnet)
     let refresh: Rc<dyn Fn()> = {
@@ -160,7 +201,11 @@ fn build_window(app: &libadwaita::Application) {
             summary.set_text(&summary_text(&state));
             rename_button.set_sensitive(state.can_rename());
             rename_button.set_tooltip_text(Some(&tooltip(&state)));
-            stack.set_visible_child_name(if state.items.is_empty() { "empty" } else { "list" });
+            stack.set_visible_child_name(if state.items.is_empty() {
+                "empty"
+            } else {
+                "list"
+            });
         })
     };
 
@@ -185,69 +230,67 @@ fn build_window(app: &libadwaita::Application) {
     *fire.borrow_mut() = Some(debounce.clone());
 
     // Dateien hinzufügen
-    let add_files = {
-        let window = window.clone();
-        let state = state.clone();
-        let refresh = refresh.clone();
-        Rc::new(move || {
-            let dialog = gtk::FileDialog::builder()
-                .title("Dateien auswählen")
-                .modal(true)
-                .build();
+    let add_files: Rc<dyn Fn()> =
+        {
+            let window = window.clone();
             let state = state.clone();
             let refresh = refresh.clone();
-            dialog.open_multiple(
-                Some(&window),
-                gio::Cancellable::NONE,
-                move |result| match result {
-                    Ok(files) => {
-                        let paths = (0..files.n_items()).filter_map(|index| {
-                            files
-                                .item(index)
-                                .and_then(|object| object.downcast::<gio::File>().ok())
-                                .and_then(|file| file.path())
-                        });
-                        state::add_paths(&state, paths);
-                        refresh();
-                    }
-                    Err(error) => {
-                        eprintln!("Dateiauswahl abgebrochen: {error}");
-                    }
-                },
-            );
-        })
-    };
-
-    let add_folder = {
-        let window = window.clone();
-        let state = state.clone();
-        let refresh = refresh.clone();
-        Rc::new(move || {
-            let dialog = gtk::FileDialog::builder()
-                .title("Ordner auswählen")
-                .modal(true)
-                .build();
-            let state = state.clone();
-            let refresh = refresh.clone();
-            dialog.select_folder(
-                Some(&window),
-                gio::Cancellable::NONE,
-                move |result| match result {
-                    Ok(folder) => {
-                        if let Some(path) = folder.path() {
-                            state::add_paths(&state, state::files_in_folder(&path));
+            Rc::new(move || {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Dateien auswählen")
+                    .modal(true)
+                    .build();
+                let state = state.clone();
+                let refresh = refresh.clone();
+                dialog.open_multiple(Some(&window), gio::Cancellable::NONE, move |result| {
+                    match result {
+                        Ok(files) => {
+                            let paths = (0..files.n_items()).filter_map(|index| {
+                                files
+                                    .item(index)
+                                    .and_then(|object| object.downcast::<gio::File>().ok())
+                                    .and_then(|file| file.path())
+                            });
+                            state::add_paths(&state, paths);
                             refresh();
                         }
+                        Err(error) => {
+                            eprintln!("Dateiauswahl abgebrochen: {error}");
+                        }
                     }
-                    Err(error) => {
-                        eprintln!("Ordnerauswahl abgebrochen: {error}");
-                    }
-                },
-            );
-        })
-    };
+                });
+            })
+        };
 
-    let clear_all = {
+    let add_folder: Rc<dyn Fn()> =
+        {
+            let window = window.clone();
+            let state = state.clone();
+            let refresh = refresh.clone();
+            Rc::new(move || {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Ordner auswählen")
+                    .modal(true)
+                    .build();
+                let state = state.clone();
+                let refresh = refresh.clone();
+                dialog.select_folder(Some(&window), gio::Cancellable::NONE, move |result| {
+                    match result {
+                        Ok(folder) => {
+                            if let Some(path) = folder.path() {
+                                state::add_paths(&state, state::files_in_folder(&path));
+                                refresh();
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("Ordnerauswahl abgebrochen: {error}");
+                        }
+                    }
+                });
+            })
+        };
+
+    let clear_all: Rc<dyn Fn()> = {
         let state = state.clone();
         let refresh = refresh.clone();
         Rc::new(move || {
@@ -257,7 +300,7 @@ fn build_window(app: &libadwaita::Application) {
     };
 
     // Umbenennen
-    let rename = {
+    let rename: Rc<dyn Fn()> = {
         let window = window.clone();
         let state = state.clone();
         let refresh = refresh.clone();
@@ -269,7 +312,9 @@ fn build_window(app: &libadwaita::Application) {
             }
             let dialog = libadwaita::AlertDialog::builder()
                 .heading(format!("{} Datei(en) umbenennen?", plan.rename_rows()))
-                .body("Die Vorschau ist verbindlich. Vorhandene Dateien werden nicht überschrieben.")
+                .body(
+                    "Die Vorschau ist verbindlich. Vorhandene Dateien werden nicht überschrieben.",
+                )
                 .build();
             dialog.add_response("cancel", "Abbrechen");
             dialog.add_response("rename", "Umbenennen");
@@ -288,31 +333,42 @@ fn build_window(app: &libadwaita::Application) {
                 let refresh = refresh.clone();
                 let toast_overlay = toast_overlay.clone();
                 let plan = plan.clone();
-                let finish = move |result: Result<ExecutionReport, crate::engine::ExecuteError>| {
-                    match result {
-                        Ok(report) => {
-                            apply_report(&state, &report);
-                            refresh();
-                            toast_overlay.add_toast(libadwaita::Toast::new(&format!(
-                                "{} Datei(en) umbenannt, {} unverändert",
-                                report.renamed_count(),
-                                report.skipped
-                            )));
-                        }
-                        Err(error) => {
-                            toast_overlay.add_toast(libadwaita::Toast::new(&format!(
-                                "Fehler: {error}"
-                            )));
-                        }
+                let finish: FinishCallback = Rc::new(move |result| match result {
+                    Ok(report) => {
+                        apply_report(&state, &report);
+                        refresh();
+                        toast_overlay.add_toast(libadwaita::Toast::new(&format!(
+                            "{} Datei(en) umbenannt, {} unverändert",
+                            report.renamed_count(),
+                            report.skipped
+                        )));
                     }
-                };
+                    Err(error) => {
+                        toast_overlay
+                            .add_toast(libadwaita::Toast::new(&format!("Fehler: {error}")));
+                    }
+                });
 
                 // Große Listen im Hintergrund ausführen, damit die UI bedienbar bleibt.
                 if plan.rows.len() > 100 {
+                    // Ergebnis im Hintergrund erzeugen und im Hauptloop abholen.
+                    let (sender, receiver) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
-                        let result = execute(&plan);
-                        let finish = finish.clone();
-                        gtk::glib::idle_add_once(move || finish(result));
+                        let _ = sender.send(execute(&plan));
+                    });
+                    gtk::glib::timeout_add_local(Duration::from_millis(50), move || match receiver
+                        .try_recv()
+                    {
+                        Ok(result) => {
+                            finish(result);
+                            gtk::glib::ControlFlow::Break
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            gtk::glib::ControlFlow::Break
+                        }
                     });
                 } else {
                     finish(execute(&plan));
@@ -336,6 +392,20 @@ fn build_window(app: &libadwaita::Application) {
         actions.add_action(&action);
     }
     window.insert_action_group("win", Some(&actions));
+
+    // Dateien von der Kommandozeile bzw. aus dem Dateimanager übernehmen.
+    let add_from_outside: AddPaths = {
+        let state = state.clone();
+        let refresh = refresh.clone();
+        Rc::new(move |paths: Vec<PathBuf>| {
+            state::add_paths(&state, paths);
+            refresh();
+        })
+    };
+    ADD_CALLBACK.with(|slot| *slot.borrow_mut() = Some(add_from_outside.clone()));
+    if !initial.is_empty() {
+        add_from_outside(initial);
+    }
 
     add_button.connect_clicked(move |_| add_files());
     let add_folder_for_button = add_folder.clone();
@@ -370,10 +440,9 @@ fn summary_text(state: &AppState) -> String {
         return "Keine Dateien".to_string();
     }
     format!(
-        "{} Datei(en) · {}/{} Gruppen · {} Umbenennung(en) · {} Problem(e)",
+        "{} Datei(en) in {} Gruppe(n) · {} Umbenennung(en) · {} Problem(e)",
         state.items.len(),
         state.groups().len(),
-        state.items.len(),
         plan.rename_rows(),
         plan.blocking_rows()
     )
@@ -384,20 +453,13 @@ fn tooltip(state: &AppState) -> String {
         return "Regel ist ungültig".to_string();
     }
     if !state.plan.is_executable() {
-        return format!("{} Zeile(n) blockieren die Ausführung", state.plan.blocking_rows());
+        return format!(
+            "{} Zeile(n) blockieren die Ausführung",
+            state.plan.blocking_rows()
+        );
     }
     if state.plan.rename_rows() == 0 {
         return "Keine Änderung geplant".to_string();
     }
     String::new()
-}
-
-/// Sichtbarer Dateiname inklusive Erweiterung.
-pub fn display_name(item: &FileItem) -> String {
-    item.file_name_for(&item.stem)
-}
-
-#[allow(dead_code)]
-fn paths(items: &[FileItem]) -> Vec<PathBuf> {
-    items.iter().map(|item| item.path.clone()).collect()
 }

@@ -13,7 +13,8 @@ pub fn render(list: &gtk::ListBox, plan: &RenamePlan) {
     while index < plan.rows.len() {
         let start = index;
         let mut end = index + 1;
-        while end < plan.rows.len() && plan.rows[end].new_stem == plan.rows[start].new_stem
+        while end < plan.rows.len()
+            && plan.rows[end].new_stem == plan.rows[start].new_stem
             && plan.rows[end].item.stem == plan.rows[start].item.stem
         {
             end += 1;
@@ -65,7 +66,7 @@ fn file_row(row: &crate::engine::PlanRow, indented: bool) -> gtk::ListBoxRow {
         line.set_margin_start(24);
     }
 
-    let old_name = gtk::Label::new(Some(&row.item.file_name()));
+    let old_name = gtk::Label::new(Some(&file_name(&row.item)));
     old_name.set_xalign(0.0);
     old_name.set_hexpand(true);
     old_name.add_css_class("dim-label");
@@ -87,7 +88,10 @@ fn file_row(row: &crate::engine::PlanRow, indented: bool) -> gtk::ListBoxRow {
     status.add_css_class("caption");
     status.add_css_class(match row.status {
         PlanStatus::Ok | PlanStatus::CaseOnly => "success",
-        PlanStatus::Collision | PlanStatus::Duplicate | PlanStatus::InvalidName | PlanStatus::RuleError => "error",
+        PlanStatus::Collision
+        | PlanStatus::Duplicate
+        | PlanStatus::InvalidName
+        | PlanStatus::RuleError => "error",
         PlanStatus::Unchanged | PlanStatus::Skipped => "dim-label",
     });
     if let Some(note) = &row.note {
@@ -118,8 +122,6 @@ fn escape(text: &str) -> String {
 }
 
 /// Dateiname inklusive Erweiterung, wie er in der Liste steht.
-impl crate::engine::FileItem {
-    fn file_name(&self) -> String {
-        self.file_name_for(&self.stem)
-    }
+fn file_name(item: &crate::engine::FileItem) -> String {
+    item.file_name_for(&item.stem)
 }

@@ -1,8 +1,8 @@
 //! GTK4/libadwaita-Oberfläche.
 
 mod app;
-mod file_list;
-mod rule_panel;
-mod state;
+pub mod file_list;
+pub mod rule_panel;
+pub mod state;
 
 pub use app::run;
