@@ -77,11 +77,24 @@ Ziel: Jedes Issue hat am Ende eine klare User Story, **prüfbare Akzeptanzkriter
 
 - **Nie** direkt auf `main` pushen, nie Force-Push auf `main`, Branch-Schutz nie ändern ohne Owner-Freigabe.
 - Ein Issue pro Branch/PR. Kein Scope-Creep.
-- Das Tool benennt Nutzerdateien um: **Datenverlust ist der schlimmste Fehler.** Jede Umbenennungslogik braucht Tests für Kollisionen, Sonderzeichen, Groß/Kleinschreibung, lange Pfade und Abbruch mittendrin; Vorschau vor Ausführung und Undo sind Kernprinzipien.
+- Das Tool benennt Nutzerdateien um: **Datenverlust ist der schlimmste Fehler.** Kernprinzipien in v1: **immer Vorschau vor Ausführung** und **Kollisionen blockieren** (nie überschreiben). Jede Umbenennungslogik braucht Tests für Kollisionen, Namenszyklen (a→b, b→a), Sonderzeichen, Groß/Kleinschreibung, lange Pfade und Abbruch mittendrin. Umbenennen läuft zweiphasig über temporäre Namen, damit Namenszyklen sicher sind.
 - Keine Secrets ins Repo. Neue Abhängigkeiten nur, wenn nötig und in Fedora gut verfügbar; im PR begründen.
 - Fehlschlagende Tests nie löschen oder abschwächen, um grün zu werden.
 
 ## Stack & Befehle
 
-> Noch nicht festgelegt – wird im Rahmen der Anforderungsphase entschieden und hier eingetragen
-> (Sprache, UI-Toolkit, Build, Test, Lint, lokaler Start, Packaging).
+- **Sprache:** Rust (Edition 2024), Toolchain per rustup (stabil).
+- **UI:** GTK4 + libadwaita über `gtk4-rs`; Systempakete `gtk4-devel`, `libadwaita-devel`.
+- **Struktur:** ein Crate (`fancy-renamer`) mit `src/core/` (reine Domänenlogik, **keine** GTK-Abhängigkeiten) und `src/ui/` (GTK). Tests der Domänenlogik laufen ohne Display, mit `tempfile` statt echten Nutzerdateien.
+- **Regex:** `regex`-Crate (kein Backtracking, keine Backreferences).
+- **Packaging:** v1 nur aus dem Quellcode (`cargo build --release`, binär nach `~/.local/bin`); Flatpak/RPM später.
+- **Befehle:**
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo run              # startet die App
+```
+
+Liegen Systempakete nicht vor, ist das ein Blocker: im Issue dokumentieren, nicht durch Deaktivieren von Features umgehen.
