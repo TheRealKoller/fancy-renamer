@@ -39,6 +39,23 @@ Danach erscheint **fancy-renamer** in der Anwendungsübersicht. Ziele lassen sic
 `XDG_BIN_HOME` und `XDG_DATA_HOME` ändern. `PREFIX=~/.local ./install.sh` installiert nach
 `~/.local`; `./uninstall.sh` entfernt die abgelegten Dateien wieder (mit denselben Variablen).
 
+### Nautilus-Kontextmenü (optional)
+
+Mit markierten Dateien im Dateimanager direkt starten:
+
+```sh
+sudo dnf install nautilus-python
+./install-nautilus.sh
+nautilus -q    # Nautilus neu starten
+```
+
+Der Eintrag **Mit fancy-renamer umbenennen…** erscheint für markierte Dateien und Ordner und
+übergibt ihre Pfade an die App. Die Erweiterung liegt in `nautilus/fancy-renamer.py` und wird nach
+`${XDG_DATA_HOME:-~/.local/share}/nautilus-python/extensions/` kopiert; ohne `--nautilus` bleibt die
+Installation unverändert. Die App wird über `FANCY_RENAMER_BIN`, `${XDG_BIN_HOME}`,
+`~/.local/bin` oder den `PATH` gesucht; fehlt sie, erscheint kein Menüeintrag. Tests ohne Nautilus:
+`python3 nautilus/test_extension.py`.
+
 ## Bauen, starten, testen
 
 ```sh
