@@ -2,7 +2,7 @@ use fancy_renamer::engine::{
     FileGroup, FileItem, Id3Mode, Id3TagRule, PlanStatus, RuleChain, build_plan, execute,
 };
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
 
 const FIXTURE_V23: &str = "tests/fixtures/id3v23.mp3";
@@ -124,5 +124,5 @@ fn rule_renames_and_extension_stays() {
     let rule = Id3TagRule::new("{title}", Id3Mode::Replace).unwrap();
     let plan = build_plan(&FileGroup::from_items(&items), &chain(rule));
     execute(&plan).unwrap();
-    assert!(PathBuf::from(dir.path().join("Weiß.mp3")).exists());
+    assert!(dir.path().join("Weiß.mp3").exists());
 }

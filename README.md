@@ -70,12 +70,19 @@ umbenannt wird jede Datei in ihrem eigenen Ordner.
 Die Liste bleibt natürlich sortiert (`foto2` vor `foto10`), doppelte Pfade werden nicht erneut
 aufgenommen, nicht lesbare Pfade meldet ein Hinweis.
 
-Im Regelbereich lassen sich die vier Karten kombinieren, per Pfeiltasten umsortieren und einzeln
+Im Regelbereich lassen sich die fünf Karten kombinieren, per Pfeiltasten umsortieren und einzeln
 abschalten. Die Karten werden **von oben nach unten** angewendet, jede Regel arbeitet auf dem
 Ergebnis der vorherigen; aktive Karten tragen ihre Schrittnummer. Die Trennlinie zwischen Regeln und
 Vorschau ist ziehbar, der Regelbereich lässt sich so vergrößern. Jede Änderung berechnet die
 Vorschau neu (entprellt), große Listen im Hintergrund. Zeilen mit Problemen (Kollision, doppelter
 Name, ungültiger Name) blockieren **Umbenennen** und nennen den Grund im Tooltip.
+
+Die Karte **Aufnahmedatum (EXIF)** setzt das Datum des Fotos in den Namen (`%Y-%m-%d_%H-%M-%S`,
+Fallback `DateTimeOriginal` → `DateTimeDigitized` → `DateTime`). Die Karte **Musik (ID3)** verarbeitet
+Musikdateien; das Format nimmt die Platzhalter `{artist}`, `{title}`, `{album}`, `{track}` (zweistellig)
+und `{year}`, Voreinstellung `{artist} - {title}`. Gelesen wird ID3v2, ohne ID3v2 die ID3v1-Tags
+(latin-1). Fehlen die Metadaten, bleibt die Datei unverändert und erscheint als übersprungen; leere
+Platzhalter hinterlassen keine doppelten Trennzeichen.
 
 Über **Presets** im Kopf des Regelbereichs lassen sich Regelketten benennen, wieder laden,
 umbenennen und löschen; der Knopf daneben speichert die aktuell aktiven Regeln samt aller
