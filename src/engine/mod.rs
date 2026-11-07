@@ -16,4 +16,6 @@ pub use group::FileGroup;
 pub use item::FileItem;
 pub use plan::{PlanRow, PlanStatus, RenamePlan, build_plan};
 pub use rule::{Rule, RuleChain, RuleContext};
-pub use rules::{CaseMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode, NumberingRule, ReplaceRule};
+pub use rules::{
+    CaseMode, MatchMode, NormalizeOptions, NormalizeRule, NumberingMode, NumberingRule, ReplaceRule,
+};
