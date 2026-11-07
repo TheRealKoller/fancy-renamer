@@ -124,7 +124,7 @@ fn identical_timestamps_collide_and_block() {
 
 #[test]
 fn numbering_breaks_timestamp_collisions() {
-    use fancy_renamer::engine::{NumberingMode, NumberingRule, Rule};
+    use fancy_renamer::engine::{NumberingMode, NumberingRule};
 
     let dir = TempDir::new().unwrap();
     let items = [
