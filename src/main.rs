@@ -1,5 +1,3 @@
-mod ui;
-
 fn main() -> anyhow::Result<()> {
-    ui::run()
+    fancy_renamer::ui::run()
 }

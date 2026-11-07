@@ -22,9 +22,43 @@ Technik: Rust + GTK4/libadwaita. Lizenz: GPL-3.0.
 ```sh
 cargo build --release   # Binär: target/release/fancy-renamer
 cargo run               # App starten
-cargo test              # Tests (headless, ohne Display)
+cargo test              # Tests; UI-Tests brauchen ein Display (siehe unten)
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+```
+
+## Bedienung
+
+Dateien über **Dateien hinzufügen** (`Ctrl+O`) oder **Ordner hinzufügen** in die Liste holen –
+oder die App direkt mit Pfaden starten:
+
+```sh
+fancy-renamer ~/Bilder/*.jpg
+```
+
+Im Regelbereich lassen sich die vier Karten kombinieren, per Hoch/Runter umsortieren und einzeln
+abschalten; die Reihenfolge der Karten ist die Reihenfolge der Regeln. Jede Änderung berechnet die
+Vorschau neu (entprellt), große Listen im Hintergrund. Zeilen mit Problemen (Kollision, doppelter
+Name, ungültiger Name) blockieren **Umbenennen** und nennen den Grund im Tooltip.
+
+Tastenkürzel: `Ctrl+O` Dateien, `Ctrl+Enter` umbenennen, `Ctrl+Entf` Liste leeren. Einzelne Zeilen
+entfernt der Knopf am Zeilenende.
+
+## Paare
+
+Dateien mit gleichem Stamminhalt und unterschiedlicher Erweiterung (`abc.jpg` + `abc.raw`,
+`abc.CR2`, `abc.xmp`) bilden eine **Gruppe**. Die Vorschau zeigt sie als Block mit Kopfzeile
+„Gruppe abc → abc“; Regeln mit Gruppenbezug (z. B. Nummerierung) vergeben innerhalb der Gruppe
+denselben Wert, sodass der Zusammenhang im Dateisystem erhalten bleibt. Gruppen entstehen nur bei
+mindestens zwei Dateien mit identischem Stamm, Einzeldateien erscheinen ohne Kopfzeile.
+
+## Tests
+
+`cargo test` läuft ohne Display; die UI-Tests (`tests/ui.rs`) brauchen eines und überspringen sich
+sonst. Mit virtuellem X-Server:
+
+```sh
+xvfb-run -a cargo test
 ```
 
 ## Projektstruktur
